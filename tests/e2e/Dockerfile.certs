@@ -1,0 +1,11 @@
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
+ARG OPENSSL_VERSION=3.5.6-1~deb13u2
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends openssl="${OPENSSL_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 certs \
+    && useradd --uid 1000 --gid certs --no-create-home --shell /usr/sbin/nologin certs \
+    && mkdir /tls \
+    && chown certs:certs /tls
+USER certs
+ENTRYPOINT ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=pool-lb", "-addext", "subjectAltName=DNS:pool-lb", "-keyout", "/tls/key.pem", "-out", "/tls/cert.pem"]

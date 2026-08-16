@@ -1,0 +1,7 @@
+FROM python:3.14-slim-trixie@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
+RUN groupadd --gid 1000 fake-pool \
+    && useradd --uid 1000 --gid fake-pool --no-create-home --shell /usr/sbin/nologin fake-pool
+COPY tests/e2e/fake_pool.py /usr/local/bin/fake-pool
+USER fake-pool
+EXPOSE 3333 7777
+ENTRYPOINT ["python3", "/usr/local/bin/fake-pool"]

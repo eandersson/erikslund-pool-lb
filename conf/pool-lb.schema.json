@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "erikslund-pool-lb configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["listeners", "pools", "active_pool"],
+  "properties": {
+    "listeners": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "address"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "address": {"type": "string", "minLength": 3},
+          "tls": {"type": "boolean"},
+          "certificate_file": {"type": "string"},
+          "private_key_file": {"type": "string"}
+        }
+      }
+    },
+    "pools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "backends"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "backends": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "address"],
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "address": {"type": "string", "minLength": 3},
+                "health_address": {"type": "string"},
+                "send_proxy_v2": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "active_pool": {"type": "string", "minLength": 1},
+    "failover": {"type": "boolean"},
+    "upstream_source_addresses": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 45,
+        "anyOf": [
+          {"format": "ipv4"},
+          {"format": "ipv6"}
+        ]
+      }
+    },
+    "api_address": {"type": "string", "minLength": 3},
+    "io_workers": {"type": "integer", "minimum": 0, "maximum": 256},
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval_seconds": {"type": "integer", "minimum": 1},
+        "connect_timeout_milliseconds": {"type": "integer", "minimum": 1},
+        "rise_checks": {"type": "integer", "minimum": 1},
+        "fall_checks": {"type": "integer", "minimum": 1}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_connections": {"type": "integer", "minimum": 1},
+        "max_connections_per_ip": {"type": "integer", "minimum": 1},
+        "connections_per_second_per_ip": {"type": "number", "exclusiveMinimum": 0},
+        "connection_burst_per_ip": {"type": "integer", "minimum": 1},
+        "global_connections_per_second": {"type": "number", "exclusiveMinimum": 0},
+        "global_connection_burst": {"type": "integer", "minimum": 1},
+        "ipv6_prefix_bits": {"type": "integer", "minimum": 1, "maximum": 128},
+        "max_tracked_client_ips": {"type": "integer", "minimum": 1},
+        "client_state_retention_seconds": {"type": "integer", "minimum": 1},
+        "messages_per_second_per_connection": {"type": "number", "exclusiveMinimum": 0},
+        "message_burst_per_connection": {"type": "integer", "minimum": 1},
+        "bytes_per_second_per_connection": {"type": "number", "exclusiveMinimum": 0},
+        "byte_burst_per_connection": {"type": "integer", "minimum": 1},
+        "messages_per_second_per_ip": {"type": "number", "exclusiveMinimum": 0},
+        "message_burst_per_ip": {"type": "integer", "minimum": 1},
+        "bytes_per_second_per_ip": {"type": "number", "exclusiveMinimum": 0},
+        "byte_burst_per_ip": {"type": "integer", "minimum": 1},
+        "max_messages_per_ready_event": {"type": "integer", "minimum": 1},
+        "max_line_bytes": {"type": "integer", "minimum": 1},
+        "max_buffer_bytes": {"type": "integer", "minimum": 1},
+        "max_queued_bytes": {"type": "integer", "minimum": 1},
+        "tls_handshake_timeout_seconds": {"type": "integer", "minimum": 1},
+        "first_message_timeout_seconds": {"type": "integer", "minimum": 1},
+        "upstream_connect_timeout_milliseconds": {"type": "integer", "minimum": 1},
+        "idle_timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_unknown_mining_methods": {"type": "boolean"},
+        "additional_allowed_methods": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^mining\\.[ -~]+$"
+          }
+        },
+        "additional_initial_methods": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^mining\\.[ -~]+$"
+          }
+        },
+        "max_json_depth": {"type": "integer", "minimum": 2, "maximum": 128}
+      }
+    }
+  }
+}

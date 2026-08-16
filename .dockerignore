@@ -1,0 +1,12 @@
+**
+!CMakeLists.txt
+!Dockerfile
+!docker/
+!docker/clang-tidy.sh
+!docker/cppcheck.sh
+!src/
+!src/**
+!tests/
+!tests/**
+!conf/
+!conf/**

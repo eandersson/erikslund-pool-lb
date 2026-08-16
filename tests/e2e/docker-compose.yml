@@ -1,0 +1,115 @@
+services:
+  certs:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.certs
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 64m
+    cpus: 0.5
+    volumes:
+      - tls:/tls
+
+  pool-primary:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.pool
+    environment:
+      BACKEND_NAME: primary
+      RESPONSE_PADDING_BYTES: "${E2E_RESPONSE_PADDING_BYTES:-0}"
+      STALL_AFTER_REQUESTS: "${E2E_STALL_AFTER_REQUESTS:-0}"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  pool-secondary:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.pool
+    environment:
+      BACKEND_NAME: secondary
+      RESPONSE_PADDING_BYTES: "${E2E_RESPONSE_PADDING_BYTES:-0}"
+      STALL_AFTER_REQUESTS: "${E2E_STALL_AFTER_REQUESTS:-0}"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  pool-lb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+      pool-primary:
+        condition: service_started
+      pool-secondary:
+        condition: service_started
+    command: ["--config", "/etc/erikslund-pool-lb/pool-lb.yml"]
+    volumes:
+      - ${E2E_POOL_LB_CONFIG:-./pool-lb.yml}:/etc/erikslund-pool-lb/pool-lb.yml:ro
+      - tls:/tls:ro
+    ports:
+      - "127.0.0.1:13333:3333/tcp"
+      - "127.0.0.1:13334:3334/tcp"
+      - "127.0.0.1:17778:7778/tcp"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=../../seccomp-prod.json"
+    pids_limit: 512
+    mem_limit: 512m
+    cpus: 2.0
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  tester:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.tester
+    depends_on: [pool-lb]
+    environment:
+      LB_HOST: pool-lb
+      LB_PORT: "3333"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 256m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    profiles: ["test"]
+
+volumes:
+  tls:

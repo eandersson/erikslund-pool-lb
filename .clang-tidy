@@ -1,0 +1,16 @@
+# Static-analysis overlay for the C++ load balancer. GCC remains the authoritative
+# compiler; docker/clang-tidy.sh surfaces Clang front-end diagnostics as notes and
+# gates only findings from the curated analyzer families below.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  performance-*,
+  -performance-enum-size,
+  clang-analyzer-*,
+  portability-*
+# The runner owns gate semantics so compiler diagnostics and analyzer findings
+# cannot be conflated through clang-tidy's exit status.
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/(api|core|net|routing|stratum)/'
+FormatStyle: none

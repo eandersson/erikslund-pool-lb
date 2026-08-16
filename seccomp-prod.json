@@ -1,0 +1,66 @@
+{
+  "_comment": "Default-deny profile for the pool load balancer. Keep this allowlist synchronized with the seccomp-enabled E2E test.",
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "defaultErrnoRet": 1,
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32"],
+  "syscalls": [
+    {
+      "comment": "Program startup, dynamic loading, configuration, and read-only process metadata.",
+      "action": "SCMP_ACT_ALLOW",
+      "names": [
+        "access", "arch_prctl", "brk", "capget", "close", "close_range", "dup", "dup2",
+        "dup3", "execve", "exit", "exit_group", "faccessat", "faccessat2", "fcntl",
+        "fstat", "fstatfs", "getcwd", "getdents64", "getegid", "geteuid", "getgid",
+        "getpid", "getppid", "getrlimit", "gettid", "getuid", "ioctl", "lseek",
+        "newfstatat", "openat", "pread64", "prlimit64", "read", "readlink", "readlinkat",
+        "statx", "uname", "write", "writev"
+      ]
+    },
+    {
+      "comment": "Container-runtime exec-FIFO setup; capability dropping prevents the daemon from using these mount APIs.",
+      "action": "SCMP_ACT_ALLOW",
+      "names": ["fsconfig", "fsmount", "fsopen", "move_mount", "open_tree"]
+    },
+    {
+      "comment": "Memory allocation, C++ synchronization, clocks, signals, and bounded worker threads.",
+      "action": "SCMP_ACT_ALLOW",
+      "names": [
+        "clock_gettime", "clock_nanosleep", "futex", "futex_waitv", "getcpu", "getrandom",
+        "madvise", "membarrier", "mmap", "mprotect", "mremap", "munmap", "nanosleep",
+        "prctl", "restart_syscall", "rseq", "rt_sigaction", "rt_sigpending",
+        "rt_sigprocmask", "rt_sigreturn", "rt_sigsuspend", "sched_getaffinity",
+        "sched_getcpu", "sched_yield", "set_robust_list", "set_tid_address", "sigaltstack",
+        "sysinfo", "tgkill"
+      ]
+    },
+    {
+      "comment": "TCP listeners, upstream connections, DNS, epoll reactors, and the HTTP probe.",
+      "action": "SCMP_ACT_ALLOW",
+      "names": [
+        "accept", "accept4", "bind", "connect", "epoll_create1", "epoll_ctl", "epoll_pwait",
+        "epoll_pwait2", "epoll_wait", "eventfd2", "getpeername", "getsockname", "getsockopt",
+        "listen", "poll", "ppoll", "readv", "recvmmsg", "recvfrom", "recvmsg", "sendmmsg",
+        "sendmsg", "sendto", "setsockopt", "shutdown", "socket"
+      ]
+    },
+    {
+      "comment": "Permit pthread clone only when no namespace-creation flag is present.",
+      "action": "SCMP_ACT_ALLOW",
+      "names": ["clone"],
+      "args": [
+        {
+          "index": 0,
+          "value": 2114060416,
+          "valueTwo": 0,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "comment": "Force glibc to use filtered clone instead of the argument-indirect clone3 API.",
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "names": ["clone3"]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+listeners:
+  - name: sv1
+    address: "0.0.0.0:3333"
+    tls: false
+    certificate_file: ""
+    private_key_file: ""
+  - name: sv1-tls
+    address: "0.0.0.0:3334"
+    tls: true
+    certificate_file: "/tls/cert.pem"
+    private_key_file: "/tls/key.pem"
+active_pool: primary
+failover: true
+pools:
+  - name: primary
+    backends:
+      - name: pool-primary
+        address: "pool-primary:3333"
+        health_address: "pool-primary:7777"
+        send_proxy_v2: true
+  - name: secondary
+    backends:
+      - name: pool-secondary
+        address: "pool-secondary:3333"
+        health_address: "pool-secondary:7777"
+        send_proxy_v2: true
+api_address: "0.0.0.0:7778"
+io_workers: 2
+health:
+  interval_seconds: 1
+  connect_timeout_milliseconds: 500
+  rise_checks: 1
+  fall_checks: 2
+limits:
+  max_connections: 20000
+  max_connections_per_ip: 20000
+  connections_per_second_per_ip: 100000.0
+  connection_burst_per_ip: 20000
+  global_connections_per_second: 100000.0
+  global_connection_burst: 20000
+  ipv6_prefix_bits: 64
+  max_tracked_client_ips: 20000
+  client_state_retention_seconds: 60
+  messages_per_second_per_connection: 100000.0
+  message_burst_per_connection: 1024
+  bytes_per_second_per_connection: 10000000.0
+  byte_burst_per_connection: 1000000
+  messages_per_second_per_ip: 100000.0
+  message_burst_per_ip: 20000
+  bytes_per_second_per_ip: 100000000.0
+  byte_burst_per_ip: 100000000
+  max_messages_per_ready_event: 1024
+  max_line_bytes: 16384
+  max_buffer_bytes: 262144
+  max_queued_bytes: 67108864
+  tls_handshake_timeout_seconds: 5
+  first_message_timeout_seconds: 5
+  upstream_connect_timeout_milliseconds: 1000
+  idle_timeout_seconds: 60
+protocol:
+  additional_allowed_methods: []
+  additional_initial_methods: []
+  allow_unknown_mining_methods: false
+  max_json_depth: 32

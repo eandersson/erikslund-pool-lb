@@ -1,0 +1,84 @@
+# Local demo: real load balancer with two deterministic fake SV1 pools.
+services:
+  pool-primary:
+    build:
+      context: .
+      dockerfile: tests/e2e/Dockerfile.pool
+    environment:
+      BACKEND_NAME: primary
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+
+  pool-secondary:
+    build:
+      context: .
+      dockerfile: tests/e2e/Dockerfile.pool
+    environment:
+      BACKEND_NAME: secondary
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+
+  pool-lb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: erikslund-pool-lb:latest
+    depends_on: [pool-primary, pool-secondary]
+    command: ["--config", "/etc/erikslund-pool-lb/pool-lb.yml"]
+    volumes:
+      - ./conf/pool-lb.compose.yml:/etc/erikslund-pool-lb/pool-lb.yml:ro
+    ports:
+      - "3333:3333/tcp"
+      - "127.0.0.1:7778:7778/tcp"
+    restart: unless-stopped
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=./seccomp-prod.json"
+    pids_limit: 512
+    mem_limit: 512m
+    cpus: 2.0
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  tester:
+    build:
+      context: .
+      dockerfile: tests/e2e/Dockerfile.tester
+    environment:
+      LB_HOST: pool-lb
+      LB_PORT: "3333"
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: 0.5
+    profiles: ["test"]

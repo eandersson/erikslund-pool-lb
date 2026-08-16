@@ -1,0 +1,31 @@
+# Production host-network deployment. Install config and TLS material under /opt first.
+services:
+  pool-lb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: erikslund-pool-lb:latest
+    network_mode: host
+    restart: unless-stopped
+    user: "1000:1000"
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=./seccomp-prod.json"
+    pids_limit: 512
+    # These are deployment inputs, not a 100k-capacity claim. Set them from measured plain/TLS
+    # bytes per session and reactor saturation on the target host.
+    mem_limit: ${POOL_LB_MEMORY_LIMIT:-1g}
+    cpus: ${POOL_LB_CPUS:-2.0}
+    stop_grace_period: 30s
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    volumes:
+      - /opt/erikslund-pool-lb/etc/pool-lb.yml:/etc/erikslund-pool-lb/pool-lb.yml:ro
+      - /opt/erikslund-pool-lb/etc/tls:/etc/erikslund-pool-lb/tls:ro
+      # Mount the complete tree because live/ entries are symlinks into archive/.
+      - /etc/letsencrypt:/etc/letsencrypt:ro

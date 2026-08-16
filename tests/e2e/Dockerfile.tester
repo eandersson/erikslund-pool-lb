@@ -1,0 +1,6 @@
+FROM python:3.14-slim-trixie@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
+RUN groupadd --gid 1000 tester \
+    && useradd --uid 1000 --gid tester --no-create-home --shell /usr/sbin/nologin tester
+COPY tests/e2e/tester.py /usr/local/bin/tester
+USER tester
+ENTRYPOINT ["python3", "/usr/local/bin/tester"]

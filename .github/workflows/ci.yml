@@ -1,0 +1,176 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      qualification_scenario:
+        description: Optional measured scenario on the shared runner (not production evidence)
+        type: choice
+        required: true
+        default: none
+        options: [none, idle, relay, reconnect, malformed, stalled-client, stalled-upstream]
+      qualification_connections:
+        description: Concurrent sessions for idle/relay; shared-runner maximum is 5000
+        type: string
+        required: true
+        default: "1000"
+      qualification_duration_seconds:
+        description: Measured duration; shared-runner maximum is 120 seconds
+        type: string
+        required: true
+        default: "30"
+      qualification_rate_per_second:
+        description: Relay messages or churn operations per second; maximum is 5000
+        type: string
+        required: true
+        default: "1000"
+      qualification_tls:
+        description: Run the selected scenario through the SV1/TLS listener
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pool-lb-ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: bash scripts/test.sh
+
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: clang-tidy
+        run: |
+          docker build -f docker/Dockerfile -t erikslund-pool-lb-build .
+          docker run --rm -v "$PWD:/src:ro" \
+            -v erikslund-pool-lb-tidy-build:/build \
+            --entrypoint /usr/local/bin/clang-tidy.sh erikslund-pool-lb-build
+
+  cppcheck:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: cppcheck
+        run: |
+          docker build -f docker/Dockerfile -t erikslund-pool-lb-build .
+          docker run --rm -v "$PWD:/src:ro" \
+            --entrypoint /usr/local/bin/cppcheck.sh erikslund-pool-lb-build
+
+  production-image:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: docker build --tag erikslund-pool-lb:ci .
+
+  e2e:
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: bash scripts/e2e.sh
+
+  stress:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: bash scripts/stress.sh
+
+  scheduled-soak:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Hold 5,000 valid proxied sessions
+        env:
+          STRESS_CONNECTIONS: "5000"
+          STRESS_RESULT_DIR: soak-results
+        run: |
+          mkdir -p soak-results
+          set -o pipefail
+          bash scripts/stress.sh 2>&1 | tee soak-results/stress.log
+      - name: Upload correctness-soak evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pool-lb-5000-session-correctness-soak
+          path: soak-results
+          if-no-files-found: warn
+          retention-days: 14
+
+  qualification:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.qualification_scenario != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      QUALIFICATION_SCENARIO: ${{ inputs.qualification_scenario }}
+      QUALIFICATION_CONNECTIONS: ${{ inputs.qualification_connections }}
+      QUALIFICATION_DURATION_SECONDS: ${{ inputs.qualification_duration_seconds }}
+      QUALIFICATION_RATE_PER_SECOND: ${{ inputs.qualification_rate_per_second }}
+      QUALIFICATION_TLS: ${{ inputs.qualification_tls }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Validate shared-runner qualification bounds
+        run: |
+          [[ "$QUALIFICATION_CONNECTIONS" =~ ^[1-9][0-9]*$ ]]
+          [[ "$QUALIFICATION_CONNECTIONS" -le 5000 ]]
+          awk -v value="$QUALIFICATION_DURATION_SECONDS" \
+            'BEGIN { exit !(value > 0 && value <= 120) }'
+          awk -v value="$QUALIFICATION_RATE_PER_SECOND" \
+            'BEGIN { exit !(value > 0 && value <= 5000) }'
+          if [[ "$QUALIFICATION_SCENARIO" == "stalled-client" || \
+                "$QUALIFICATION_SCENARIO" == "stalled-upstream" ]]; then
+            [[ "$QUALIFICATION_CONNECTIONS" -le 32 ]]
+            awk -v value="$QUALIFICATION_DURATION_SECONDS" \
+              'BEGIN { exit !(value <= 30) }'
+          fi
+      - name: Run measured qualification scenario
+        run: |
+          if [[ "$QUALIFICATION_TLS" == "true" ]]; then
+            export BENCH_TLS=1
+          else
+            export BENCH_TLS=0
+          fi
+          export BENCH_SCENARIO="$QUALIFICATION_SCENARIO"
+          export BENCH_CONNECTIONS="$QUALIFICATION_CONNECTIONS"
+          export BENCH_DURATION_SECONDS="$QUALIFICATION_DURATION_SECONDS"
+          export BENCH_RATE_PER_SECOND="$QUALIFICATION_RATE_PER_SECOND"
+          export BENCH_RESULT_DIR=benchmark-results/ci
+          export BENCH_GENERATOR_ID=github-hosted-runner
+          bash scripts/benchmark.sh
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pool-lb-qualification-${{ inputs.qualification_scenario }}
+          path: benchmark-results/ci
+          if-no-files-found: warn
+          retention-days: 14
