@@ -64,7 +64,6 @@ RUN groupadd --gid 1000 pool-lb \
     && useradd --uid 1000 --gid pool-lb --no-create-home --shell /usr/sbin/nologin pool-lb
 COPY --from=builder /runtime-libs/ /usr/local/lib/pool-lb/
 COPY --from=builder /build/erikslund-pool-lb /usr/local/bin/erikslund-pool-lb
-COPY conf/pool-lb.example.yml /etc/erikslund-pool-lb/pool-lb.example.yml
 ENV LD_LIBRARY_PATH=/usr/local/lib/pool-lb
 
 USER pool-lb
