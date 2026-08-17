@@ -43,6 +43,9 @@ struct ClientKeyHash {
 
 Endpoint parse_endpoint(const std::string& address);
 std::vector<SocketAddress> resolve_endpoints(const Endpoint& endpoint, bool passive = false);
+[[nodiscard]] bool same_address(const SocketAddress& left, const SocketAddress& right) noexcept;
+[[nodiscard]] bool same_addresses(const std::vector<SocketAddress>& left,
+                                  const std::vector<SocketAddress>& right);
 SocketAddress resolve_numeric_bind_host(std::string_view host);
 std::string address_host(const sockaddr_storage& address);
 ClientKey client_rate_limit_key(const sockaddr_storage& address, int ipv6_prefix_bits);

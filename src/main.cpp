@@ -146,7 +146,7 @@ int main(int argument_count, char** arguments) {
         net::EdgeServer edge(*config, state);
         api::HttpServer http(*config, state);
         routing::HealthMonitor health(state);
-        edge.start();
+        edge.start([] { stop_requested.store(true, std::memory_order_relaxed); });
         std::jthread health_thread([&health](const std::stop_token& token) {
             try {
                 health.run(token);

@@ -346,6 +346,17 @@ public:
     }
 
     void run(const std::stop_token& stop_token) {
+        try {
+            dispatch_events(stop_token);
+        } catch (...) {
+            shutdown();
+            throw;
+        }
+        shutdown();
+    }
+
+private:
+    void dispatch_events(const std::stop_token& stop_token) {
         std::array<epoll_event, kMaximumEvents> events{};
         std::array<char, kIoChunkBytes> input{};
         while (!stop_token.stop_requested()) {
@@ -382,11 +393,24 @@ public:
                         SteadyClock::now() - batch_started_at));
             expire_timeouts(SteadyClock::now());
         }
+    }
+
+    // A stopping worker must drop its listeners. The kernel keeps completing handshakes onto a
+    // bound SO_REUSEPORT socket even when no thread accepts from it, so a listener left behind
+    // would silently swallow this worker's share of every new connection.
+    void shutdown() {
+        for (ListenerState& listener : listener_states_) {
+            if (!listener.socket)
+                continue;
+            if (listener.registered)
+                ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, listener.socket.get(), nullptr);
+            listener.registered = false;
+            listener.socket.reset();
+        }
         while (!sessions_.empty())
             close_session(sessions_.begin()->first);
     }
 
-private:
     void add_fd(int file_descriptor, std::uint32_t events, std::uint64_t token) const {
         if (try_add_fd(file_descriptor, events, token))
             return;

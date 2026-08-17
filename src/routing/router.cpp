@@ -5,14 +5,15 @@
 #include <string_view>
 
 #include "core/errors.hpp"
+#include "core/logging.hpp"
 
 namespace erikslund::routing {
 
 namespace {
 
-std::shared_ptr<BackendState> reusable_backend(const std::shared_ptr<const RoutingTable>& previous,
-                                               const core::BackendConfig& config,
-                                               std::string_view pool_name) {
+std::shared_ptr<BackendState> carried_over_backend(
+    const std::shared_ptr<const RoutingTable>& previous, const core::BackendConfig& config,
+    std::string_view pool_name) {
     if (!previous)
         return {};
     for (const PoolState& pool : previous->pools)
@@ -23,6 +24,38 @@ std::shared_ptr<BackendState> reusable_backend(const std::shared_ptr<const Routi
                 backend->send_proxy_v2 == config.send_proxy_v2)
                 return backend;
     return {};
+}
+
+std::shared_ptr<BackendState> resolve_backend(const std::shared_ptr<BackendState>& carried_over,
+                                              const core::BackendConfig& config,
+                                              std::string_view pool_name) {
+    std::vector<net::SocketAddress> addresses;
+    std::vector<net::SocketAddress> health_addresses;
+    try {
+        addresses = net::resolve_endpoints(net::parse_endpoint(config.address));
+        if (!config.health_address.empty())
+            health_addresses = net::resolve_endpoints(net::parse_endpoint(config.health_address));
+    } catch (const core::ConfigError& error) {
+        if (!carried_over)
+            throw;
+        core::log::warning("Backend {}/{} did not resolve, keeping its last known address: {}",
+                           pool_name, config.name, error.what());
+        return carried_over;
+    }
+    // A name that now points somewhere else is a different backend. Reusing the earlier state
+    // would pin every new session to the stale address until the process restarts.
+    if (carried_over && net::same_addresses(carried_over->socket_addresses, addresses) &&
+        net::same_addresses(carried_over->health_socket_addresses, health_addresses))
+        return carried_over;
+    auto backend = std::make_shared<BackendState>();
+    backend->name = config.name;
+    backend->pool = pool_name;
+    backend->configured_address = config.address;
+    backend->socket_addresses = std::move(addresses);
+    backend->configured_health_address = config.health_address;
+    backend->health_socket_addresses = std::move(health_addresses);
+    backend->send_proxy_v2 = config.send_proxy_v2;
+    return backend;
 }
 
 std::shared_ptr<BackendState> choose_from_pool(const PoolState& pool, std::uint64_t sequence) {
@@ -67,20 +100,9 @@ std::shared_ptr<RoutingTable> make_routing_table(
     for (const core::PoolConfig& pool_config : config.pools) {
         PoolState pool{.name = pool_config.name, .backends = {}};
         for (const core::BackendConfig& backend_config : pool_config.backends) {
-            auto backend = reusable_backend(previous, backend_config, pool_config.name);
-            if (!backend) {
-                backend = std::make_shared<BackendState>();
-                backend->name = backend_config.name;
-                backend->pool = pool_config.name;
-                backend->configured_address = backend_config.address;
-                backend->socket_addresses =
-                    net::resolve_endpoints(net::parse_endpoint(backend_config.address));
-                backend->configured_health_address = backend_config.health_address;
-                if (!backend_config.health_address.empty())
-                    backend->health_socket_addresses = net::resolve_endpoints(
-                        net::parse_endpoint(backend_config.health_address));
-                backend->send_proxy_v2 = backend_config.send_proxy_v2;
-            }
+            auto backend = resolve_backend(
+                carried_over_backend(previous, backend_config, pool_config.name), backend_config,
+                pool_config.name);
             if (!table->upstream_source_addresses.empty() &&
                 !has_compatible_source(table->upstream_source_addresses,
                                        backend->socket_addresses))

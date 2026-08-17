@@ -52,10 +52,8 @@ std::vector<SocketAddress> resolve_addresses(std::string_view host, std::uint16_
         std::memcpy(&address.value, entry->ai_addr, entry->ai_addrlen);
         address.length = static_cast<socklen_t>(entry->ai_addrlen);
         address.family = entry->ai_family;
-        const bool duplicate = std::ranges::any_of(addresses, [&address](const SocketAddress& prior) {
-            return prior.family == address.family && prior.length == address.length &&
-                   std::memcmp(&prior.value, &address.value, address.length) == 0;
-        });
+        const bool duplicate = std::ranges::any_of(
+            addresses, [&address](const SocketAddress& prior) { return same_address(prior, address); });
         if (!duplicate)
             addresses.push_back(address);
     }
@@ -99,6 +97,20 @@ Endpoint parse_endpoint(const std::string& address) {
 
 std::vector<SocketAddress> resolve_endpoints(const Endpoint& endpoint, bool passive) {
     return resolve_addresses(endpoint.host, endpoint.port, passive ? AI_PASSIVE : 0);
+}
+
+bool same_address(const SocketAddress& left, const SocketAddress& right) noexcept {
+    // sockaddr_storage is padded well past the bytes any family uses; only the resolved prefix
+    // carries meaning, and resolve_addresses zero-fills the rest.
+    return left.family == right.family && left.length == right.length &&
+           std::memcmp(&left.value, &right.value, left.length) == 0;
+}
+
+bool same_addresses(const std::vector<SocketAddress>& left,
+                    const std::vector<SocketAddress>& right) {
+    // Resolvers commonly rotate records between queries, so compare as a set: only a genuine
+    // change of destination should count as a different address list.
+    return left.size() == right.size() && std::ranges::is_permutation(left, right, same_address);
 }
 
 SocketAddress resolve_numeric_bind_host(std::string_view host) {

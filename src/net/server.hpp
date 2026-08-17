@@ -1,6 +1,7 @@
 #pragma once
 // SV1/SV1-TLS edge listeners and admitted connection lifecycle.
 
+#include <functional>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -17,7 +18,9 @@ public:
     EdgeServer(const EdgeServer&) = delete;
     EdgeServer& operator=(const EdgeServer&) = delete;
 
-    void start();
+    // on_worker_failure runs on the failing reactor thread when it stops early; the caller decides
+    // whether losing a worker should stop the process.
+    void start(std::function<void()> on_worker_failure = {});
     void stop();
     void reload_tls(const core::Config& config);
 

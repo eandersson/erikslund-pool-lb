@@ -4,6 +4,7 @@
 
 #include "core/config.hpp"
 #include "core/errors.hpp"
+#include "net/endpoint.hpp"
 #include "routing/router.hpp"
 
 namespace {
@@ -72,6 +73,58 @@ TEST_CASE("routing reload reuses unchanged backend health and session state") {
     CHECK(replacement->pools[0].backends[0]->healthy.load());
     CHECK(replacement->pools[0].backends[0]->active_connections.load() == 7);
     CHECK(replacement->active_pool == "secondary");
+}
+
+TEST_CASE("routing reload replaces a backend whose address now resolves elsewhere") {
+    const auto config = routing_config();
+    const auto first = erikslund::routing::make_routing_table(config);
+    const auto original_backend = first->pools[0].backends[0];
+    original_backend->healthy.store(true);
+    original_backend->active_connections.store(4);
+    // Stands in for a hostname that moved since the last resolution: the configured text is
+    // unchanged, but the address behind it is not.
+    original_backend->socket_addresses = erikslund::net::resolve_endpoints(
+        erikslund::net::parse_endpoint("127.0.0.2:13333"));
+
+    const auto replacement = erikslund::routing::make_routing_table(config, first);
+    const auto reloaded = replacement->pools[0].backends[0];
+    CHECK(reloaded != original_backend);
+    REQUIRE(reloaded->socket_addresses.size() == 1);
+    CHECK(erikslund::net::address_host(reloaded->socket_addresses.front().value) == "127.0.0.1");
+    CHECK_FALSE(reloaded->healthy.load());
+    CHECK(reloaded->active_connections.load() == 0);
+}
+
+TEST_CASE("routing reload keeps the last known address when a backend stops resolving") {
+    auto config = routing_config();
+    const auto first = erikslund::routing::make_routing_table(config);
+    const auto original_backend = first->pools[0].backends[0];
+    original_backend->healthy.store(true);
+    original_backend->active_connections.store(3);
+
+    // What a reload sees once DNS stops answering for a name that resolved on an earlier table.
+    const std::string unresolvable = "backend.invalid:13333";
+    original_backend->configured_address = unresolvable;
+    config.pools[0].backends[0].address = unresolvable;
+    config.active_pool = "secondary";
+
+    const auto replacement = erikslund::routing::make_routing_table(config, first);
+    const auto reloaded = replacement->pools[0].backends[0];
+    CHECK(reloaded == original_backend);
+    CHECK(reloaded->healthy.load());
+    CHECK(reloaded->active_connections.load() == 3);
+    // The rest of the reload still lands.
+    CHECK(replacement->active_pool == "secondary");
+}
+
+TEST_CASE("routing reload is rejected when a backend has never resolved") {
+    auto config = routing_config();
+    const auto first = erikslund::routing::make_routing_table(config);
+    config.pools[0].backends.push_back({.name = "primary-c",
+                                        .address = "backend.invalid:13333",
+                                        .health_address = {}});
+    CHECK_THROWS_AS(erikslund::routing::make_routing_table(config, first),
+                    erikslund::core::ConfigError);
 }
 
 TEST_CASE("routing reload replaces a backend when its health endpoint changes") {

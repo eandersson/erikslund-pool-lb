@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <vector>
+
 #include <arpa/inet.h>
 
 #include "core/errors.hpp"
@@ -57,6 +59,42 @@ TEST_CASE("endpoint resolver retains every usable result") {
     CHECK_FALSE(localhost.empty());
     for (const auto& address : localhost)
         CHECK((address.family == AF_INET || address.family == AF_INET6));
+}
+
+TEST_CASE("address comparison distinguishes host, port, and family") {
+    using erikslund::net::parse_endpoint;
+    using erikslund::net::resolve_endpoints;
+    using erikslund::net::same_address;
+
+    const auto address = resolve_endpoints(parse_endpoint("127.0.0.1:13333")).front();
+    CHECK(same_address(address, resolve_endpoints(parse_endpoint("127.0.0.1:13333")).front()));
+    CHECK_FALSE(
+        same_address(address, resolve_endpoints(parse_endpoint("127.0.0.1:13334")).front()));
+    CHECK_FALSE(
+        same_address(address, resolve_endpoints(parse_endpoint("127.0.0.2:13333")).front()));
+    CHECK_FALSE(same_address(address, resolve_endpoints(parse_endpoint("[::1]:13333")).front()));
+}
+
+TEST_CASE("address list comparison ignores resolver record order") {
+    using erikslund::net::parse_endpoint;
+    using erikslund::net::resolve_endpoints;
+    using erikslund::net::same_addresses;
+    using erikslund::net::SocketAddress;
+
+    const SocketAddress first = resolve_endpoints(parse_endpoint("127.0.0.1:13333")).front();
+    const SocketAddress second = resolve_endpoints(parse_endpoint("127.0.0.2:13333")).front();
+    const std::vector<SocketAddress> original{first, second};
+    const std::vector<SocketAddress> same_order{first, second};
+    const std::vector<SocketAddress> rotated{second, first};
+    const std::vector<SocketAddress> shorter{first};
+    const std::vector<SocketAddress> duplicated{first, first};
+    const std::vector<SocketAddress> empty;
+
+    CHECK(same_addresses(original, same_order));
+    CHECK(same_addresses(original, rotated));
+    CHECK_FALSE(same_addresses(original, shorter));
+    CHECK_FALSE(same_addresses(original, duplicated));
+    CHECK(same_addresses(empty, empty));
 }
 
 TEST_CASE("numeric bind resolver creates port-zero source addresses") {

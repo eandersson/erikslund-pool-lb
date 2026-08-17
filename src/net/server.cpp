@@ -131,16 +131,23 @@ EdgeServer::~EdgeServer() {
     stop();
 }
 
-void EdgeServer::start() {
+void EdgeServer::start(std::function<void()> on_worker_failure) {
     if (!threads_.empty())
         return;
     threads_.reserve(runtime_->reactors.size());
     for (const auto& reactor : runtime_->reactors)
-        threads_.emplace_back([reactor = reactor.get()](const std::stop_token& stop_token) {
+        threads_.emplace_back([reactor = reactor.get(), on_worker_failure](
+                                  const std::stop_token& stop_token) {
             try {
                 reactor->run(stop_token);
             } catch (const std::exception& error) {
-                core::log::error("I/O reactor stopped: {}", error.what());
+                // run() has already released this worker's listeners, so new connections stop
+                // landing on a socket nobody accepts from. The sessions it held are gone either
+                // way, so the caller stops the process rather than serving on a reduced worker
+                // set that no metric reports.
+                core::log::error("I/O reactor failed: {}", error.what());
+                if (on_worker_failure)
+                    on_worker_failure();
             }
         });
     const auto runtime = state_.runtime.load(std::memory_order_acquire);
