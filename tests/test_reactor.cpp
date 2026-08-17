@@ -397,8 +397,8 @@ TEST_CASE("reactor drains half-closed peers across multiple fairness budgets") {
 
 TEST_CASE("reactor pauses upstream reads for a stalled miner instead of dropping it") {
     constexpr std::size_t kMaximumBufferBytes = 65'536;
-    constexpr std::size_t kResponseBytes = 1'048'576;
-    constexpr int kClientReceiveBufferBytes = 4'096;
+    constexpr std::size_t kResponseBytes = 16 * 1'024 * 1'024;
+    constexpr int kClientReceiveBufferBytes = 2'048;
     const std::string request = "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[]}\n";
     const std::string response = patterned_payload(kResponseBytes);
 
@@ -427,6 +427,8 @@ TEST_CASE("reactor pauses upstream reads for a stalled miner instead of dropping
     // The miner reads nothing at all here, so the pool response backs up inside the edge.
     REQUIRE(erikslund::test::wait_until(
         [&state] { return state.stats.snapshot().upstream_reads_paused >= 1; }, 5s));
+    // Reading really stopped: the pool had far more to send than the edge accepted.
+    CHECK(state.stats.snapshot().upstream_bytes < kResponseBytes);
     // Flow control must pause the reader, not drop the session or blame the miner's protocol.
     CHECK(state.stats.snapshot().closed_connections == 0);
     CHECK(state.stats.snapshot().rejected_protocol == 0);

@@ -39,6 +39,7 @@ enum class RequestMethod : std::uint8_t {
     SuggestTarget,
     UpdatePassword,
     Extension,
+    Response,
 };
 
 struct ProtocolState {

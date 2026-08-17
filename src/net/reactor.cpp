@@ -1199,6 +1199,12 @@ private:
         if (iterator == sessions_.end())
             return;
         Session& session = iterator->second;
+        if (session.upstream && session.stage == SessionStage::Relay &&
+            !session.to_upstream.empty()) {
+            const IoResult flushed = write_upstream(session);
+            if (flushed.status == IoStatus::Data && flushed.size > 0)
+                state_.stats.release_queued_bytes(flushed.size);
+        }
         ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, session.client.get(), nullptr);
         if (session.upstream)
             ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, session.upstream.get(), nullptr);

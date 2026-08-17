@@ -56,11 +56,14 @@ struct RequestEnvelope {
     std::optional<glz::raw_json_view> id;
     std::optional<glz::raw_json_view> method;
     std::optional<glz::raw_json_view> params;
+    std::optional<glz::raw_json_view> result;
+    std::optional<glz::raw_json_view> error;
 
     struct glaze {
         using T = RequestEnvelope;
         static constexpr auto value =
-            glz::object("id", &T::id, "method", &T::method, "params", &T::params);
+            glz::object("id", &T::id, "method", &T::method, "params", &T::params, "result",
+                        &T::result, "error", &T::error);
     };
 };
 
@@ -349,8 +352,16 @@ ValidationResult validate_request(std::string_view line, const ProtocolState& st
     RequestEnvelope envelope;
     if (glz::read<kEnvelopeReadOptions>(envelope, line))
         return reject(ValidationError::InvalidJson);
-    if (!envelope.method)
-        return reject(ValidationError::InvalidShape);
+    if (!envelope.method) {
+        if (!state.received_message || !envelope.id || (!envelope.result && !envelope.error))
+            return reject(ValidationError::InvalidShape);
+        const ValidationError id_error = valid_id(envelope.id->str);
+        if (id_error != ValidationError::None)
+            return reject(id_error, RequestMethod::Response);
+        return {.error = ValidationError::None,
+                .method = RequestMethod::Response,
+                .rejected_method = {}};
+    }
 
     DecodedString decoded_method;
     if (!decode_json_string(envelope.method->str, decoded_method)) {

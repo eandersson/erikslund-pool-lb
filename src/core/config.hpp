@@ -39,7 +39,7 @@ struct HealthConfig {
 
 struct LimitsConfig {
     std::size_t max_connections = 100'000;
-    std::size_t max_connections_per_ip = 32;
+    std::size_t max_connections_per_ip = 512;
     double connections_per_second_per_ip = 4.0;
     std::size_t connection_burst_per_ip = 16;
     double global_connections_per_second = 5'000.0;
@@ -47,12 +47,12 @@ struct LimitsConfig {
     int ipv6_prefix_bits = 64;
     std::size_t max_tracked_client_ips = 262'144;
     int client_state_retention_seconds = 300;
-    double messages_per_second_per_connection = 32.0;
-    std::size_t message_burst_per_connection = 128;
+    double messages_per_second_per_connection = 128.0;
+    std::size_t message_burst_per_connection = 256;
     double bytes_per_second_per_connection = 262'144.0;
     std::size_t byte_burst_per_connection = 524'288;
-    double messages_per_second_per_ip = 512.0;
-    std::size_t message_burst_per_ip = 2'048;
+    double messages_per_second_per_ip = 1024.0;
+    std::size_t message_burst_per_ip = 8'192;
     double bytes_per_second_per_ip = 4'194'304.0;
     std::size_t byte_burst_per_ip = 16'777'216;
     std::size_t max_messages_per_ready_event = 256;

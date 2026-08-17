@@ -26,6 +26,42 @@ TEST_CASE("validator accepts normal SV1 client methods") {
         state, config));
 }
 
+TEST_CASE("validator accepts firmware replies to server-initiated requests") {
+    const ProtocolConfig config;
+    ProtocolState state;
+    REQUIRE(validate_request(R"({"id":1,"method":"mining.subscribe","params":[]})", state, config));
+    record_request(state, "mining.subscribe");
+
+    // What cgminer-derived firmware sends back when a pool asks client.get_version.
+    const auto version_reply =
+        validate_request(R"({"id":7,"result":"cgminer/4.11.1","error":null})", state, config);
+    CHECK(version_reply);
+    CHECK(version_reply.method == RequestMethod::Response);
+    CHECK(validate_request(R"({"id":8,"result":true,"error":null})", state, config));
+    CHECK(validate_request(R"({"id":9,"result":null,"error":[20,"Other/Unknown",null]})", state,
+                           config));
+
+    // A reply must not advance the handshake it is not part of.
+    record_request(state, RequestMethod::Response);
+    CHECK_FALSE(state.authorized);
+}
+
+TEST_CASE("validator still refuses a response as the opening line") {
+    const ProtocolConfig config;
+    const ProtocolState state;
+    CHECK(validate_request(R"({"id":7,"result":"cgminer/4.11.1","error":null})", state, config)
+              .error == ValidationError::InvalidShape);
+    // Still not a request, and still missing the result/error a response must carry.
+    ProtocolState started;
+    record_request(started, "mining.subscribe");
+    CHECK(validate_request(R"({"id":7})", started, config).error ==
+          ValidationError::InvalidShape);
+    CHECK(validate_request(R"({"result":true,"error":null})", started, config).error ==
+          ValidationError::InvalidShape);
+    CHECK(validate_request(R"({"id":{},"result":true,"error":null})", started, config).error ==
+          ValidationError::InvalidId);
+}
+
 TEST_CASE("validator rejects scanning and malformed messages") {
     const ProtocolConfig config;
     const ProtocolState state;

@@ -18,6 +18,8 @@ namespace erikslund::net {
 
 namespace {
 
+constexpr auto kDeadPeerTimeout = std::chrono::milliseconds(90'000);
+
 int remaining_milliseconds(SteadyClock::time_point deadline) {
     const auto remaining =
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - SteadyClock::now()).count();
@@ -32,6 +34,9 @@ void configure_stream_socket(int file_descriptor) {
     const int enabled = 1;
     ::setsockopt(file_descriptor, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
     ::setsockopt(file_descriptor, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled));
+    const unsigned int user_timeout_milliseconds = kDeadPeerTimeout.count();
+    ::setsockopt(file_descriptor, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_milliseconds,
+                 sizeof(user_timeout_milliseconds));
 }
 
 UniqueFd create_listener(const SocketAddress& address, int backlog, bool reuse_port) {
