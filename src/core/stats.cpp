@@ -55,6 +55,8 @@ StatsSnapshot Stats::snapshot() const noexcept {
         output.upstream_connect_errors += load(worker_stats->upstream_connect_errors);
         output.client_bytes += load(worker_stats->client_bytes);
         output.upstream_bytes += load(worker_stats->upstream_bytes);
+        output.client_reads_paused += load(worker_stats->client_reads_paused);
+        output.upstream_reads_paused += load(worker_stats->upstream_reads_paused);
         output.events_processed += load(worker_stats->events_processed);
         output.event_batches += load(worker_stats->event_batches);
         output.batch_processing_nanoseconds += load(worker_stats->batch_processing_nanoseconds);

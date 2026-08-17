@@ -395,6 +395,55 @@ TEST_CASE("reactor drains half-closed peers across multiple fairness budgets") {
     edge.stop();
 }
 
+TEST_CASE("reactor pauses upstream reads for a stalled miner instead of dropping it") {
+    constexpr std::size_t kMaximumBufferBytes = 65'536;
+    constexpr std::size_t kResponseBytes = 1'048'576;
+    constexpr int kClientReceiveBufferBytes = 4'096;
+    const std::string request = "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[]}\n";
+    const std::string response = patterned_payload(kResponseBytes);
+
+    HalfCloseBackend backend(request.size(), response);
+    REQUIRE(backend.port() != 0);
+    const std::uint16_t listener_port = erikslund::test::unused_loopback_port();
+    REQUIRE(listener_port != 0);
+
+    auto mutable_config = reactor_config(listener_port, backend.port());
+    mutable_config.limits.max_buffer_bytes = kMaximumBufferBytes;
+    mutable_config.limits.idle_timeout_seconds = 30;
+    const auto config =
+        std::make_shared<const erikslund::core::Config>(std::move(mutable_config));
+    erikslund::core::ServiceState state;
+    auto routing = erikslund::routing::make_routing_table(*config);
+    routing->pools.front().backends.front()->healthy.store(true);
+    state.publish(config, routing);
+
+    erikslund::net::EdgeServer edge(*config, state);
+    edge.start();
+
+    auto client = erikslund::test::connect_loopback(listener_port, kClientReceiveBufferBytes);
+    REQUIRE(client);
+    REQUIRE(erikslund::test::send_all(client.get(), request));
+
+    // The miner reads nothing at all here, so the pool response backs up inside the edge.
+    REQUIRE(erikslund::test::wait_until(
+        [&state] { return state.stats.snapshot().upstream_reads_paused >= 1; }, 5s));
+    // Flow control must pause the reader, not drop the session or blame the miner's protocol.
+    CHECK(state.stats.snapshot().closed_connections == 0);
+    CHECK(state.stats.snapshot().rejected_protocol == 0);
+    CHECK(state.stats.snapshot().rejected_queue_limit == 0);
+    CHECK(state.stats.queued_bytes.load() <= kMaximumBufferBytes);
+
+    // Draining resumes the paused reader; every relayed byte must still arrive in order.
+    const std::string relayed = erikslund::test::read_to_close(client.get());
+    CHECK(relayed.size() == response.size());
+    CHECK(relayed == response);
+    CHECK(state.stats.snapshot().rejected_protocol == 0);
+    REQUIRE(erikslund::test::wait_until(
+        [&state] { return state.stats.queued_bytes.load() == 0; }, 2s));
+
+    edge.stop();
+}
+
 TEST_CASE("reactor rotates configured upstream source addresses") {
     SourceRecordingBackend backend;
     REQUIRE(backend.port() != 0);

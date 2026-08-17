@@ -43,13 +43,16 @@ inline std::uint16_t unused_loopback_port() {
     return bind_loopback_listener().port;
 }
 
-inline net::UniqueFd connect_loopback(std::uint16_t port) {
+inline net::UniqueFd connect_loopback(std::uint16_t port, int receive_buffer_bytes = 0) {
     net::UniqueFd socket(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP));
     if (!socket)
         return {};
     timeval timeout{.tv_sec = 4, .tv_usec = 0};
     ::setsockopt(socket.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ::setsockopt(socket.get(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    if (receive_buffer_bytes > 0)
+        ::setsockopt(socket.get(), SOL_SOCKET, SO_RCVBUF, &receive_buffer_bytes,
+                     sizeof(receive_buffer_bytes));
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);

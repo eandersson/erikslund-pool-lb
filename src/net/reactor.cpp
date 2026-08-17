@@ -44,6 +44,12 @@ constexpr std::size_t kMaximumBytesPerReadyEvent = 65'536;
 constexpr std::size_t kMaximumAcceptsPerReadyEvent = 128;
 constexpr auto kAcceptResourceBackoff = std::chrono::milliseconds(250);
 constexpr std::uint64_t kEventKindMask = 0x3;
+// Each read-side mark sits at half the level above it: pause at half the ceiling, resume at half
+// the pause mark.
+constexpr std::size_t kQueueMarkDivisor = 2;
+static_assert(kIoChunkBytes >= SSL3_RT_MAX_PLAIN_LENGTH,
+              "the read chunk must hold a whole TLS record so decrypted plaintext cannot strand");
+constexpr auto kRelayStallTimeout = std::chrono::seconds(60);
 
 enum class EventKind : std::uint64_t {
     Client = 0,
@@ -130,6 +136,7 @@ struct Session {
     SteadyClock::time_point deadline{};
     SteadyClock::time_point upstream_overall_deadline{};
     SteadyClock::time_point last_activity{};
+    SteadyClock::time_point stall_deadline{};
     std::uint32_t client_events = EPOLLIN | EPOLLRDHUP;
     std::uint32_t upstream_events = 0;
     std::uint64_t timeout_generation = 0;
@@ -148,10 +155,24 @@ struct Session {
     bool client_read_closed = false;
     bool upstream_read_closed = false;
     bool queue_limit_exceeded = false;
+    bool client_read_paused = false;
+    bool upstream_read_paused = false;
     TlsOperation tls_operation = TlsOperation::None;
     IoDirection tls_direction = IoDirection::Read;
     std::size_t client_write_retry_bytes = 0;
 };
+
+std::size_t queue_pause_bytes(const core::LimitsConfig& limits) {
+    const std::size_t headroom = limits.max_line_bytes + kIoChunkBytes;
+    if (limits.max_buffer_bytes <= headroom)
+        return limits.max_buffer_bytes;
+    return std::min(limits.max_buffer_bytes / kQueueMarkDivisor,
+                    limits.max_buffer_bytes - headroom);
+}
+
+std::size_t queue_resume_bytes(const core::LimitsConfig& limits) {
+    return queue_pause_bytes(limits) / kQueueMarkDivisor;
+}
 
 bool consume_session_traffic(Session& session, std::size_t bytes, std::size_t messages,
                              SteadyClock::time_point now) {
@@ -666,7 +687,7 @@ private:
                 return false;
         }
         if (!attempted_read && session.tls_operation == TlsOperation::None &&
-            !session.client_read_closed &&
+            !session.client_read_closed && !session.client_read_paused &&
             (events & (EPOLLIN | EPOLLHUP | EPOLLRDHUP)) != 0) {
             if (!read_from_client(session, input, read_budget_exhausted))
                 return false;
@@ -688,9 +709,7 @@ private:
             return false;
         if (connection_error && !read_budget_exhausted)
             return false;
-        // A full close cannot receive an upstream response. A write-side half-close remains a
-        // valid relay endpoint after its final bytes have been drained and recv() confirms EOF.
-        if (full_hangup && session.client_read_closed)
+        if (full_hangup && (session.client_read_closed || session.client_read_paused))
             return false;
         if (session.client_read_closed && session.stage == SessionStage::FirstMessage)
             return false;
@@ -710,7 +729,7 @@ private:
             }
         }
         std::size_t bytes_this_event = 0;
-        if ((events & (EPOLLIN | EPOLLHUP | EPOLLRDHUP)) != 0) {
+        if (!session.upstream_read_paused && (events & (EPOLLIN | EPOLLHUP | EPOLLRDHUP)) != 0) {
             while (true) {
                 const ssize_t received =
                     ::recv(session.upstream.get(), input.data(), input.size(), 0);
@@ -730,6 +749,9 @@ private:
                 bytes_this_event += size;
                 if (session.to_client.size() > session.runtime->config->limits.max_buffer_bytes)
                     return false;
+                if (session.to_client.size() >
+                    queue_pause_bytes(session.runtime->config->limits))
+                    break;
                 if (bytes_this_event >= kMaximumBytesPerReadyEvent)
                     break;
             }
@@ -751,6 +773,8 @@ private:
         }
         if ((events & EPOLLERR) != 0 && bytes_this_event < kMaximumBytesPerReadyEvent)
             return false;
+        if (session.upstream_read_paused && (events & EPOLLHUP) != 0)
+            session.upstream_read_closed = true;
         if (session.upstream_read_closed) {
             discard_upstream(session);
             return !session.to_client.empty();
@@ -853,6 +877,8 @@ private:
             messages_this_event += messages;
             if (!process_client_bytes(session, {input.data(), result.size}))
                 return false;
+            if (session.to_upstream.size() > queue_pause_bytes(session.runtime->config->limits))
+                return true;
             bytes_this_event += result.size;
             if (bytes_this_event >= kMaximumBytesPerReadyEvent) {
                 budget_exhausted = true;
@@ -1043,6 +1069,7 @@ private:
             ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, session.upstream.get(), nullptr);
         session.upstream.reset();
         session.upstream_events = 0;
+        session.upstream_read_paused = false;
     }
 
     void record_upstream_error(Session& session) const {
@@ -1051,15 +1078,47 @@ private:
         worker_stats_.upstream_connect_errors.fetch_add(1, std::memory_order_relaxed);
     }
 
-    bool update_interests(Session& session) const {
+    void refresh_read_pause(Session& session) {
+        const core::LimitsConfig& limits = session.runtime->config->limits;
+        const std::size_t pause_mark = queue_pause_bytes(limits);
+        const std::size_t resume_mark = queue_resume_bytes(limits);
+        const bool tls_buffer_drained = !session.ssl || SSL_pending(session.ssl.get()) == 0;
+        const bool client_paused =
+            tls_buffer_drained &&
+            (session.client_read_paused ? session.to_upstream.size() > resume_mark
+                                        : session.to_upstream.size() > pause_mark);
+        const bool upstream_paused =
+            session.upstream_read_paused ? session.to_client.size() > resume_mark
+                                         : session.to_client.size() > pause_mark;
+        const bool was_paused = session.client_read_paused || session.upstream_read_paused;
+        if (client_paused && !session.client_read_paused)
+            worker_stats_.client_reads_paused.fetch_add(1, std::memory_order_relaxed);
+        if (upstream_paused && !session.upstream_read_paused)
+            worker_stats_.upstream_reads_paused.fetch_add(1, std::memory_order_relaxed);
+        session.client_read_paused = client_paused;
+        session.upstream_read_paused = upstream_paused;
+        const bool is_paused = client_paused || upstream_paused;
+        if (is_paused == was_paused)
+            return;
+        if (is_paused)
+            session.stall_deadline = SteadyClock::now() + kRelayStallTimeout;
+        if (session.stage == SessionStage::Relay)
+            schedule_timeout(session);
+    }
+
+    bool update_interests(Session& session) {
+        refresh_read_pause(session);
+        const bool suppress_client_reads =
+            session.client_read_closed ||
+            (session.client_read_paused && session.tls_operation == TlsOperation::None);
         std::uint32_t client_events =
-            session.client_read_closed ? 0U : static_cast<std::uint32_t>(EPOLLRDHUP);
+            suppress_client_reads ? 0U : static_cast<std::uint32_t>(EPOLLRDHUP);
         if (!session.client_read_closed && session.tls_operation != TlsOperation::None) {
             client_events |= session.tls_direction == IoDirection::Read
                                  ? static_cast<std::uint32_t>(EPOLLIN)
                                  : static_cast<std::uint32_t>(EPOLLOUT);
         } else {
-            if (!session.client_read_closed)
+            if (!suppress_client_reads)
                 client_events |= EPOLLIN;
             if (!session.to_client.empty())
                 client_events |= EPOLLOUT;
@@ -1071,11 +1130,13 @@ private:
             session.client_events = client_events;
         }
         if (session.upstream) {
-            std::uint32_t upstream_events = EPOLLRDHUP;
+            std::uint32_t upstream_events =
+                session.upstream_read_paused ? 0U : static_cast<std::uint32_t>(EPOLLRDHUP);
             if (session.stage == SessionStage::UpstreamConnect) {
                 upstream_events |= EPOLLOUT;
             } else {
-                upstream_events |= EPOLLIN;
+                if (!session.upstream_read_paused)
+                    upstream_events |= EPOLLIN;
                 if (!session.to_upstream.empty())
                     upstream_events |= EPOLLOUT;
             }
@@ -1092,6 +1153,8 @@ private:
     SteadyClock::time_point timeout_deadline(const Session& session) const {
         if (session.stage != SessionStage::Relay)
             return session.deadline;
+        if (session.client_read_paused || session.upstream_read_paused)
+            return session.stall_deadline;
         return session.last_activity +
                std::chrono::seconds(session.runtime->config->limits.idle_timeout_seconds);
     }

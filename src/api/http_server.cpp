@@ -181,6 +181,12 @@ std::string metrics_body(const core::ServiceState& state,
             aggregate.client_bytes);
     counter("pool_lb_upstream_bytes_total", "Bytes received from pool backends.",
             aggregate.upstream_bytes);
+    counter("pool_lb_relay_client_reads_paused_total",
+            "Times miner reads were paused because the upstream queue hit its high-water mark.",
+            aggregate.client_reads_paused);
+    counter("pool_lb_relay_upstream_reads_paused_total",
+            "Times pool reads were paused because the miner queue hit its high-water mark.",
+            aggregate.upstream_reads_paused);
     gauge("pool_lb_queued_bytes", "Bytes currently queued across both relay directions.",
           stats.queued_bytes.load(std::memory_order_relaxed));
     gauge("pool_lb_queued_bytes_limit", "Current process-wide queued-byte limit.",

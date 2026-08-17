@@ -33,6 +33,8 @@ struct alignas(kCacheLineBytes) WorkerStats {
     std::atomic<std::uint64_t> upstream_connect_errors{0};
     std::atomic<std::uint64_t> client_bytes{0};
     std::atomic<std::uint64_t> upstream_bytes{0};
+    std::atomic<std::uint64_t> client_reads_paused{0};
+    std::atomic<std::uint64_t> upstream_reads_paused{0};
     std::atomic<std::uint64_t> events_processed{0};
     std::atomic<std::uint64_t> event_batches{0};
     std::atomic<std::uint64_t> batch_processing_nanoseconds{0};
@@ -62,6 +64,8 @@ struct StatsSnapshot {
     std::uint64_t upstream_connect_errors = 0;
     std::uint64_t client_bytes = 0;
     std::uint64_t upstream_bytes = 0;
+    std::uint64_t client_reads_paused = 0;
+    std::uint64_t upstream_reads_paused = 0;
     std::uint64_t events_processed = 0;
     std::uint64_t event_batches = 0;
     std::uint64_t batch_processing_nanoseconds = 0;
