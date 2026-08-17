@@ -49,6 +49,8 @@ constexpr std::size_t kMaximumIdentityBytes = 512;
 constexpr std::size_t kMaximumShortStringBytes = 128;
 constexpr std::size_t kMaximumConfigureExtensions = 32;
 constexpr std::size_t kMaximumConfigureOptions = 64;
+constexpr std::size_t kMaximumSubscribeParams = 4;
+constexpr std::size_t kMaximumAuthorizeParams = 2;
 
 using RawParams = glz::inplace_vector<glz::raw_json_view, kMaximumGenericParams>;
 
@@ -167,6 +169,7 @@ bool allowed_initial_method(RequestMethod method, std::string_view method_name,
     case RequestMethod::ExtranonceSubscribe:
     case RequestMethod::Subscribe:
     case RequestMethod::SuggestDifficulty:
+    case RequestMethod::Resume:
         return true;
     case RequestMethod::Extension:
         return std::ranges::find(config.additional_initial_methods, method_name) !=
@@ -271,12 +274,14 @@ ValidationError valid_params(RequestMethod method, const RawParams& params) {
         return ValidationError::InvalidParams;
     switch (method) {
     case RequestMethod::Authorize:
+        return params.empty() ? ValidationError::InvalidParams
+                              : primitive_params(params, kMaximumAuthorizeParams);
     case RequestMethod::UpdatePassword:
         return strings_only(params, 2, 2, kMaximumIdentityBytes);
     case RequestMethod::Submit:
         return strings_only(params, 5, 6, kMaximumIdentityBytes);
     case RequestMethod::Subscribe:
-        return strings_only(params, 0, 2, kMaximumIdentityBytes);
+        return primitive_params(params, kMaximumSubscribeParams);
     case RequestMethod::ExtranonceSubscribe:
         return params.empty() ? ValidationError::None : ValidationError::InvalidParams;
     case RequestMethod::SuggestTarget:
@@ -299,7 +304,7 @@ ValidationError valid_params(RequestMethod method, const RawParams& params) {
     case RequestMethod::Capabilities:
         return capabilities_params(params);
     case RequestMethod::GetTransactions:
-        return strings_only(params, 1, 1, kMaximumShortStringBytes);
+        return strings_only(params, 1, 1, kMaximumIdentityBytes);
     default:
         return primitive_params(params, kMaximumGenericParams);
     }
@@ -310,7 +315,6 @@ bool valid_sequence(RequestMethod method, const ProtocolState& state) {
     case RequestMethod::Submit:
         return state.subscribed && state.authorized;
     case RequestMethod::GetTransactions:
-    case RequestMethod::Resume:
         return state.subscribed;
     case RequestMethod::UpdatePassword:
         return state.authorized;

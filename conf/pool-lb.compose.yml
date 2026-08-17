@@ -23,36 +23,36 @@ api_address: "0.0.0.0:7778"
 io_workers: 2
 health:
   interval_seconds: 2
-  connect_timeout_milliseconds: 500
+  connect_timeout_milliseconds: 3000
   rise_checks: 1
   fall_checks: 2
 limits:
   max_connections: 1024
-  max_connections_per_ip: 64
+  max_connections_per_ip: 1024
   connections_per_second_per_ip: 20.0
-  connection_burst_per_ip: 64
+  connection_burst_per_ip: 512
   global_connections_per_second: 5000.0
   global_connection_burst: 20000
   ipv6_prefix_bits: 64
   max_tracked_client_ips: 4096
   client_state_retention_seconds: 300
-  messages_per_second_per_connection: 32.0
-  message_burst_per_connection: 128
+  messages_per_second_per_connection: 1024.0
+  message_burst_per_connection: 2048
   bytes_per_second_per_connection: 262144.0
   byte_burst_per_connection: 524288
-  messages_per_second_per_ip: 512.0
-  message_burst_per_ip: 2048
+  messages_per_second_per_ip: 32768.0
+  message_burst_per_ip: 65536
   bytes_per_second_per_ip: 4194304.0
   byte_burst_per_ip: 16777216
-  max_messages_per_ready_event: 256
+  max_messages_per_ready_event: 2048
   max_line_bytes: 16384
   max_buffer_bytes: 262144
   tls_handshake_timeout_seconds: 10
-  first_message_timeout_seconds: 10
-  upstream_connect_timeout_milliseconds: 1000
+  first_message_timeout_seconds: 15
+  upstream_connect_timeout_milliseconds: 15000
   idle_timeout_seconds: 3600
 protocol:
   additional_allowed_methods: []
   additional_initial_methods: []
-  allow_unknown_mining_methods: false
+  allow_unknown_mining_methods: true
   max_json_depth: 32

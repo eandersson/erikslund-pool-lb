@@ -36,7 +36,7 @@ TEST_CASE("configuration applies safe defaults to a minimal topology") {
     CHECK(config.limits.global_connections_per_second == 5'000.0);
     CHECK(config.limits.ipv6_prefix_bits == 64);
     CHECK(config.limits.max_tracked_client_ips == 262'144);
-    CHECK(config.limits.max_messages_per_ready_event == 256);
+    CHECK(config.limits.max_messages_per_ready_event == 2'048);
     CHECK(config.limits.max_queued_bytes == 268'435'456);
 }
 

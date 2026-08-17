@@ -100,19 +100,24 @@ TEST_CASE("validator enforces nesting without counting braces inside strings") {
               .error == ValidationError::TooDeep);
 }
 
-TEST_CASE("unknown mining extensions require an explicit compatibility switch") {
-    ProtocolConfig strict;
+TEST_CASE("unknown mining extensions are admitted by default and can be switched off") {
+    ProtocolConfig config;
     const ProtocolState state{.received_message = true};
+    // A vendor verb inside the mining.* namespace is not evidence of an illegitimate miner.
     CHECK(validate_request(R"({"id":1,"method":"mining.vendor_extension","params":[]})", state,
-                           strict)
+                           config));
+    // Everything outside the namespace stays blocked whatever the switch says.
+    CHECK(validate_request(R"({"id":1,"method":"eth_submitLogin","params":[]})", state, config)
               .error == ValidationError::InvalidMethod);
-    strict.allow_unknown_mining_methods = true;
+    config.allow_unknown_mining_methods = false;
     CHECK(validate_request(R"({"id":1,"method":"mining.vendor_extension","params":[]})", state,
-                           strict));
+                           config)
+              .error == ValidationError::InvalidMethod);
 }
 
 TEST_CASE("configured extensions are allowed without enabling every mining method") {
     ProtocolConfig config;
+    config.allow_unknown_mining_methods = false;
     config.additional_allowed_methods = {"mining.vendor_extension"};
     const ProtocolState established{.received_message = true};
     CHECK(validate_request(
@@ -152,8 +157,12 @@ TEST_CASE("validator enforces method parameters and conservative request order")
               R"({"id":2,"method":"mining.submit","params":["w","j","00","time","nonce"]})",
               state, config)
               .error == ValidationError::InvalidSequence);
+    // Firmware that omits the password, or sends it as null, is still a miner.
     CHECK(validate_request(R"({"id":3,"method":"mining.authorize","params":["worker"]})", state,
-                           config)
+                           config));
+    CHECK(validate_request(R"({"id":3,"method":"mining.authorize","params":["worker",null]})",
+                           state, config));
+    CHECK(validate_request(R"({"id":3,"method":"mining.authorize","params":[]})", state, config)
               .error == ValidationError::InvalidParams);
     CHECK(validate_request(R"({"id":3,"method":"mining.authorize","params":["worker","x"]})",
                            state, config));
