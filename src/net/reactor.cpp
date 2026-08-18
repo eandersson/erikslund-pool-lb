@@ -904,6 +904,12 @@ private:
         return true;
     }
 
+    void discard_line_bytes(Session& session, std::size_t bytes) {
+        session.line_buffer.erase(0, bytes);
+        state_.stats.release_queued_bytes(bytes);
+        release_oversized_string(session.line_buffer);
+    }
+
     bool process_client_bytes(Session& session, std::string_view bytes) {
         if (!append_line_bytes(session, bytes))
             return false;
@@ -930,8 +936,7 @@ private:
                 }
                 if (!commit_consumed(session, consumed))
                     return false;
-                session.line_buffer.erase(0, line_size + 1);
-                release_oversized_string(session.line_buffer);
+                discard_line_bytes(session, line_size + 1);
                 consumed = 0;
                 continue;
             }
@@ -1069,15 +1074,15 @@ private:
                          &error_length) < 0 ||
             socket_error != 0)
             return false;
-        session.stage = SessionStage::Relay;
-        schedule_timeout(session);
-        session.backend->active_connections.fetch_add(1, std::memory_order_relaxed);
-        session.backend_counted = true;
         if (session.backend->send_proxy_v2 &&
             !prepend_queued(session.to_upstream, session.proxy_header.view())) {
             session.queue_limit_exceeded = true;
             return false;
         }
+        session.stage = SessionStage::Relay;
+        schedule_timeout(session);
+        session.backend->active_connections.fetch_add(1, std::memory_order_relaxed);
+        session.backend_counted = true;
         return true;
     }
 

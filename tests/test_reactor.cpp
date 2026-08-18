@@ -627,3 +627,52 @@ TEST_CASE("lowered process queue limit applies to sessions admitted before reloa
 
     edge.stop();
 }
+
+TEST_CASE("a refused line is dropped without leaking its queue reservation or reaching the pool") {
+    const std::string subscribe =
+        "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[]}\n";
+    const std::string authorize =
+        "{\"id\":2,\"method\":\"mining.authorize\",\"params\":[\"worker\",\"x\"]}\n";
+    const std::string submit =
+        "{\"id\":3,\"method\":\"mining.submit\","
+        "\"params\":[\"worker\",\"job\",\"00\",\"5f000000\",\"winner\"]}\n";
+    // Junk a real miner might emit mid-session; it must cost the session nothing.
+    const std::string refused = "{\"id\":4,\"method\":\"eth_submitLogin\",\"params\":[]}\n";
+
+    FakeBackend backend(3);
+    REQUIRE(backend.port() != 0);
+    const std::uint16_t listener_port = erikslund::test::unused_loopback_port();
+    REQUIRE(listener_port != 0);
+
+    auto mutable_config = reactor_config(listener_port, backend.port());
+    mutable_config.limits.messages_per_second_per_connection = 1'000'000.0;
+    mutable_config.limits.message_burst_per_connection = 10'000;
+    const auto config =
+        std::make_shared<const erikslund::core::Config>(std::move(mutable_config));
+    erikslund::core::ServiceState state;
+    auto routing = erikslund::routing::make_routing_table(*config);
+    routing->pools.front().backends.front()->healthy.store(true);
+    state.publish(config, routing);
+
+    erikslund::net::EdgeServer edge(*config, state);
+    edge.start();
+
+    auto client = erikslund::test::connect_loopback(listener_port);
+    REQUIRE(client);
+    REQUIRE(erikslund::test::send_all(client.get(), subscribe + authorize + refused + submit));
+
+    // The share behind the refused line still reaches the pool, and the refused line does not.
+    REQUIRE(erikslund::test::wait_until(
+        [&backend, &subscribe, &authorize, &submit] {
+            return backend.request() == subscribe + authorize + submit;
+        },
+        2s));
+    // The submit arriving after the refused line is itself the proof the session survived the
+    // refusal; the backend closes once it has its three lines, so counting closes proves nothing.
+    CHECK(state.stats.snapshot().rejected_protocol == 1);
+
+    edge.stop();
+    // The discarded bytes must hand back the process-wide reservation they were charged.
+    REQUIRE(erikslund::test::wait_until(
+        [&state] { return state.stats.queued_bytes.load() == 0; }, 2s));
+}
