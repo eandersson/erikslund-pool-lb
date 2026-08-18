@@ -1,0 +1,8 @@
+FROM python:3.14-slim-trixie@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
+# iproute2 supplies tc, which needs NET_ADMIN and therefore never appears in the production image.
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+COPY tests/e2e/tester.py /usr/local/bin/tester
+COPY tests/e2e/impair.sh /usr/local/bin/impair
+RUN chmod 0755 /usr/local/bin/impair
+ENTRYPOINT ["/usr/local/bin/impair"]
