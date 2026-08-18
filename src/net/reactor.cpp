@@ -1147,17 +1147,18 @@ private:
             upstream_queue_high || (shared_pressure && !session.to_client.empty());
         const bool was_stalled =
             session.client_queue_stalled || session.upstream_queue_stalled;
+        if (client_queue_high && !session.client_queue_stalled)
+            worker_stats_.client_reads_paused.fetch_add(1, std::memory_order_relaxed);
+        if (upstream_queue_high && !session.upstream_queue_stalled)
+            worker_stats_.upstream_reads_paused.fetch_add(1, std::memory_order_relaxed);
+        if ((client_paused || upstream_paused) &&
+            !(session.client_read_paused || session.upstream_read_paused) &&
+            !client_queue_high && !upstream_queue_high)
+            worker_stats_.shared_pressure_pauses.fetch_add(1, std::memory_order_relaxed);
         session.client_queue_stalled = client_queue_high;
         session.upstream_queue_stalled = upstream_queue_high;
-        if (client_paused && !session.client_read_paused)
-            worker_stats_.client_reads_paused.fetch_add(1, std::memory_order_relaxed);
-        if (upstream_paused && !session.upstream_read_paused)
-            worker_stats_.upstream_reads_paused.fetch_add(1, std::memory_order_relaxed);
         session.client_read_paused = client_paused;
         session.upstream_read_paused = upstream_paused;
-        // Only a session stuck above its OWN mark is a stalled peer. One merely throttled because
-        // other sessions filled the shared budget is making normal progress and must keep its idle
-        // deadline, or congestion elsewhere would reap it and discard the share it is holding.
         const bool is_stalled = client_queue_high || upstream_queue_high;
         if (is_stalled == was_stalled)
             return;
