@@ -46,6 +46,7 @@ struct ProtocolState {
     bool received_message = false;
     bool subscribed = false;
     bool authorized = false;
+    bool resumed = false;
 };
 
 inline constexpr std::size_t kValidationErrorCount =

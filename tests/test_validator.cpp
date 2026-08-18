@@ -318,3 +318,27 @@ TEST_CASE("validator rejects coalesced JSON values but accepts a framed CR suffi
         "{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[]}\r", initial,
         config));
 }
+
+TEST_CASE("a resumed session can submit without re-running the handshake") {
+    const ProtocolConfig config;
+    ProtocolState state;
+    // mining.resume exists precisely so a reconnecting miner need not subscribe and authorize
+    // again, so a session opened that way must be able to submit its shares.
+    REQUIRE(validate_request(R"({"id":1,"method":"mining.resume","params":["session-1"]})", state,
+                             config));
+    record_request(state, "mining.resume");
+    CHECK(validate_request(
+        R"({"id":2,"method":"mining.submit","params":["worker","job","00","5f000000","nonce"]})",
+        state, config));
+}
+
+TEST_CASE("firmware replies survive every JSON-RPC null shape") {
+    const ProtocolConfig config;
+    ProtocolState state;
+    REQUIRE(validate_request(R"({"id":1,"method":"mining.subscribe","params":[]})", state, config));
+    record_request(state, "mining.subscribe");
+    // A void success reply carries null in both slots; rejecting it kills the session.
+    CHECK(validate_request(R"({"id":7,"result":null,"error":null})", state, config));
+    // Notification-style replies carry a null id.
+    CHECK(validate_request(R"({"id":null,"result":true,"error":null})", state, config));
+}

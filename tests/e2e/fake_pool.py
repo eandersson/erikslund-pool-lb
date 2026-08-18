@@ -22,6 +22,9 @@ STRATUM_LISTENER = object()
 HEALTH_LISTENER = object()
 RESPONSE_PADDING = "x" * RESPONSE_PADDING_BYTES
 STALLED_CONNECTIONS: dict[int, "ConnectionState"] = {}
+# Every mining.submit nonce this backend has accepted. A solo pool wins on exactly one of these, so
+# the resilience suite asserts the set is complete rather than merely large.
+ACCEPTED_SUBMIT_NONCES: set[str] = set()
 
 if RESPONSE_PADDING_BYTES < 0 or RESPONSE_PADDING_BYTES > 1_048_576:
     raise ValueError("RESPONSE_PADDING_BYTES must be between 0 and 1048576")
@@ -79,6 +82,10 @@ def process_requests(state: ConnectionState) -> None:
             return
         request = json.loads(state.input[:newline])
         del state.input[: newline + 1]
+        if request.get("method") == "mining.submit":
+            params = request.get("params")
+            if isinstance(params, list) and len(params) >= 5:
+                ACCEPTED_SUBMIT_NONCES.add(str(params[4]))
         response = {
             "id": request.get("id"),
             "result": {"backend": BACKEND_NAME, "source": state.source},
@@ -160,9 +167,15 @@ def service_health_connection(
                 close_connection(selector, state)
                 return
             if b"\r\n\r\n" in state.input:
-                healthy = state.input.startswith(b"GET /health HTTP/1.")
-                status = b"200 OK" if healthy else b"404 Not Found"
-                body = b"ok\n" if healthy else b"not found\n"
+                if state.input.startswith(b"GET /submits HTTP/1."):
+                    status = b"200 OK"
+                    body = ("\n".join(sorted(ACCEPTED_SUBMIT_NONCES)) + "\n").encode()
+                elif state.input.startswith(b"GET /health HTTP/1."):
+                    status = b"200 OK"
+                    body = b"ok\n"
+                else:
+                    status = b"404 Not Found"
+                    body = b"not found\n"
                 state.output.extend(
                     b"HTTP/1.1 "
                     + status

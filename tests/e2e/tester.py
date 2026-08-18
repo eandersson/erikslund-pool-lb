@@ -18,7 +18,9 @@ import urllib.request
 HOST = os.environ.get("LB_HOST", "pool-lb")
 PORT = int(os.environ.get("LB_PORT", "3333"))
 USE_TLS = os.environ.get("LB_TLS", "0") == "1"
-TIMEOUT_SECONDS = 5
+# Impaired scenarios deliberately push RTT into the hundreds of milliseconds with retransmits, so
+# the driver's own patience has to be raised out of the way of what it is measuring.
+TIMEOUT_SECONDS = int(os.environ.get("E2E_TIMEOUT_SECONDS", "5"))
 API_URL = os.environ.get("LB_API_URL", "http://pool-lb:7778/metrics")
 TLS_RELOAD_TIMEOUT_SECONDS = 30
 TLS_RELOAD_SUCCESS_METRIC = (
@@ -1397,12 +1399,90 @@ def load(connection_count: int) -> None:
             connection.close()
 
 
+def accepted_submit_nonces() -> set[str]:
+    url = os.environ.get("E2E_POOL_SUBMITS_URL", "http://pool-primary:7777/submits")
+    with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as response:
+        body = response.read().decode()
+    return {line.strip() for line in body.splitlines() if line.strip()}
+
+
+def share_integrity() -> bool:
+    """Every share a miner hands the edge must reach the pool. On a solo pool one of them is
+    the block, so the pass condition is the complete set, not a healthy-looking majority."""
+    miners = environment_integer("E2E_MINERS", 8, minimum=1)
+    submits_each = environment_integer("E2E_SUBMITS", 25, minimum=1)
+    slow_read = os.environ.get("E2E_SLOW_READ", "0") == "1"
+    scenario = os.environ.get("E2E_SCENARIO", "baseline")
+
+    before = accepted_submit_nonces()
+    expected: set[str] = set()
+    connections: list[socket.socket] = []
+    try:
+        for miner_index in range(miners):
+            connection = connect()
+            connections.append(connection)
+            reader = connection.makefile("rb")
+            connection.sendall(
+                encoded_request(1, "mining.subscribe", [f"resilience/{miner_index}"])
+            )
+            reader.readline()
+            connection.sendall(
+                encoded_request(2, "mining.authorize", [f"worker{miner_index}", "x"])
+            )
+            reader.readline()
+            for submit_index in range(submits_each):
+                nonce = f"{scenario}-m{miner_index}-s{submit_index}"
+                expected.add(nonce)
+                connection.sendall(
+                    encoded_request(
+                        3 + submit_index,
+                        "mining.submit",
+                        [f"worker{miner_index}", "job1", "0000", "5f000000", nonce],
+                    )
+                )
+                # A miner that reads its responses lazily must not cost anyone a share.
+                if not slow_read:
+                    reader.readline()
+            if slow_read:
+                time.sleep(0.2)
+                for _ in range(submits_each):
+                    reader.readline()
+    finally:
+        for connection in connections:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    deadline = time.monotonic() + max(TIMEOUT_SECONDS, 15)
+    delivered: set[str] = set()
+    while time.monotonic() < deadline:
+        delivered = accepted_submit_nonces() - before
+        if expected <= delivered:
+            break
+        time.sleep(0.1)
+
+    missing = sorted(expected - delivered)
+    result = {
+        "scenario": scenario,
+        "transport": "tls" if USE_TLS else "plain",
+        "miners": miners,
+        "submits_sent": len(expected),
+        "submits_delivered": len(expected & delivered),
+        "submits_lost": len(missing),
+        "lost_examples": missing[:5],
+        "passed": not missing,
+    }
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True), flush=True)
+    return not missing
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(
             "usage: tester.py expect-primary|expect-secondary|invalid-rejected|"
             "oversized-rejected|certificate-fingerprint|persistent-tls-session|"
-            "benchmark|load-N"
+            "benchmark|share-integrity|load-N"
         )
     command = sys.argv[1]
     if command == "expect-primary":
@@ -1430,6 +1510,8 @@ def main() -> int:
             }
             print(json.dumps(failure, separators=(",", ":"), sort_keys=True), flush=True)
             return 1
+    elif command == "share-integrity":
+        return 0 if share_integrity() else 1
     elif command.startswith("load-"):
         load(int(command.removeprefix("load-")))
     else:

@@ -111,5 +111,36 @@ services:
         hard: 65536
     profiles: ["test"]
 
+  # Runs the tester behind a netem impairment. NET_ADMIN is required for tc and is why this is a
+  # separate test-profile image that shares nothing with the production one; it must run as root
+  # because setting a qdisc is a privileged operation.
+  tester-impaired:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.impaired
+    depends_on: [pool-lb]
+    environment:
+      LB_HOST: pool-lb
+      LB_PORT: "3333"
+      E2E_NETEM: "${E2E_NETEM:-}"
+      E2E_SCENARIO: "${E2E_SCENARIO:-impaired}"
+      E2E_MINERS: "${E2E_MINERS:-8}"
+      E2E_SUBMITS: "${E2E_SUBMITS:-25}"
+      E2E_SLOW_READ: "${E2E_SLOW_READ:-0}"
+      E2E_TIMEOUT_SECONDS: "20"
+    cap_drop: ["ALL"]
+    cap_add: ["NET_ADMIN"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:false"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    profiles: ["test"]
+
 volumes:
   tls:

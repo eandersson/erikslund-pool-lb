@@ -313,7 +313,7 @@ ValidationError valid_params(RequestMethod method, const RawParams& params) {
 bool valid_sequence(RequestMethod method, const ProtocolState& state) {
     switch (method) {
     case RequestMethod::Submit:
-        return state.subscribed && state.authorized;
+        return (state.subscribed && state.authorized) || state.resumed;
     case RequestMethod::GetTransactions:
         return state.subscribed;
     case RequestMethod::UpdatePassword:
@@ -357,11 +357,17 @@ ValidationResult validate_request(std::string_view line, const ProtocolState& st
     if (glz::read<kEnvelopeReadOptions>(envelope, line))
         return reject(ValidationError::InvalidJson);
     if (!envelope.method) {
-        if (!state.received_message || !envelope.id || (!envelope.result && !envelope.error))
+        if (!state.received_message)
             return reject(ValidationError::InvalidShape);
-        const ValidationError id_error = valid_id(envelope.id->str);
-        if (id_error != ValidationError::None)
-            return reject(id_error, RequestMethod::Response);
+        glz::generic document;
+        if (glz::read_json(document, line))
+            return reject(ValidationError::InvalidJson);
+        if (!document.is_object() || !document.contains("id") ||
+            (!document.contains("result") && !document.contains("error")))
+            return reject(ValidationError::InvalidShape);
+        const glz::generic& id = document["id"];
+        if (!id.is_null() && !id.is_string() && !id.is_number())
+            return reject(ValidationError::InvalidId, RequestMethod::Response);
         return {.error = ValidationError::None,
                 .method = RequestMethod::Response,
                 .rejected_method = {}};
@@ -406,6 +412,8 @@ void record_request(ProtocolState& state, RequestMethod method) noexcept {
         state.subscribed = true;
     else if (method == RequestMethod::Authorize)
         state.authorized = true;
+    else if (method == RequestMethod::Resume)
+        state.resumed = true;
 }
 
 void record_request(ProtocolState& state, std::string_view method) noexcept {

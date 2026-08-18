@@ -7,7 +7,7 @@ services:
     image: erikslund-pool-lb:latest
     network_mode: host
     restart: unless-stopped
-    user: "1000:1000"
+    user: "101:101"
     cap_drop: ["ALL"]
     read_only: true
     tmpfs: ["/tmp"]
@@ -27,5 +27,4 @@ services:
     volumes:
       - /opt/erikslund-pool-lb/etc/pool-lb.yml:/etc/erikslund-pool-lb/pool-lb.yml:ro
       - /opt/erikslund-pool-lb/etc/tls:/etc/erikslund-pool-lb/tls:ro
-      # Mount the complete tree because live/ entries are symlinks into archive/.
       - /etc/letsencrypt:/etc/letsencrypt:ro
