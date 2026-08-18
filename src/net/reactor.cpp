@@ -50,6 +50,9 @@ constexpr std::size_t kQueueMarkDivisor = 2;
 static_assert(kIoChunkBytes >= SSL3_RT_MAX_PLAIN_LENGTH,
               "the read chunk must hold a whole TLS record so decrypted plaintext cannot strand");
 constexpr auto kRelayStallTimeout = std::chrono::seconds(60);
+constexpr std::uint64_t kSharedQueuePausePercent = 75;
+constexpr std::uint64_t kSharedQueueResumePercent = 50;
+constexpr std::uint64_t kPercentWhole = 100;
 constexpr std::uint32_t kMaximumConsecutiveProtocolErrors = 32;
 
 enum class EventKind : std::uint64_t {
@@ -158,6 +161,11 @@ struct Session {
     bool queue_limit_exceeded = false;
     bool client_read_paused = false;
     bool upstream_read_paused = false;
+    // Whether each direction is over its OWN mark, tracked apart from the epoll-facing pause flags
+    // because only a session stalled on its own queue may be reaped by the stall deadline.
+    bool client_queue_stalled = false;
+    bool upstream_queue_stalled = false;
+    bool shared_pressure_paused = false;
     std::uint32_t consecutive_protocol_errors = 0;
     TlsOperation tls_operation = TlsOperation::None;
     IoDirection tls_direction = IoDirection::Read;
@@ -1113,25 +1121,47 @@ private:
         const core::LimitsConfig& limits = session.runtime->config->limits;
         const std::size_t pause_mark = queue_pause_bytes(limits);
         const std::size_t resume_mark = queue_resume_bytes(limits);
+        const std::uint64_t queued = state_.stats.queued_bytes.load(std::memory_order_relaxed);
+        const std::uint64_t budget =
+            state_.stats.queued_bytes_limit.load(std::memory_order_relaxed);
+        const std::uint64_t shared_pause =
+            budget / kPercentWhole * kSharedQueuePausePercent;
+        const std::uint64_t shared_resume =
+            budget / kPercentWhole * kSharedQueueResumePercent;
+        const bool shared_pressure =
+            queued > (session.shared_pressure_paused ? shared_resume : shared_pause);
+        session.shared_pressure_paused = shared_pressure;
         const bool tls_buffer_drained = !session.ssl || SSL_pending(session.ssl.get()) == 0;
+        // Each direction's own-queue hysteresis keys on its own previous state, not on the combined
+        // pause flag, so shared pressure cannot drag a direction onto the lower resume mark.
+        const bool client_queue_high =
+            session.client_queue_stalled ? session.to_upstream.size() > resume_mark
+                                         : session.to_upstream.size() > pause_mark;
+        const bool upstream_queue_high =
+            session.upstream_queue_stalled ? session.to_client.size() > resume_mark
+                                           : session.to_client.size() > pause_mark;
         const bool client_paused =
             tls_buffer_drained &&
-            (session.client_read_paused ? session.to_upstream.size() > resume_mark
-                                        : session.to_upstream.size() > pause_mark);
+            (client_queue_high || (shared_pressure && !session.to_upstream.empty()));
         const bool upstream_paused =
-            session.upstream_read_paused ? session.to_client.size() > resume_mark
-                                         : session.to_client.size() > pause_mark;
-        const bool was_paused = session.client_read_paused || session.upstream_read_paused;
+            upstream_queue_high || (shared_pressure && !session.to_client.empty());
+        const bool was_stalled =
+            session.client_queue_stalled || session.upstream_queue_stalled;
+        session.client_queue_stalled = client_queue_high;
+        session.upstream_queue_stalled = upstream_queue_high;
         if (client_paused && !session.client_read_paused)
             worker_stats_.client_reads_paused.fetch_add(1, std::memory_order_relaxed);
         if (upstream_paused && !session.upstream_read_paused)
             worker_stats_.upstream_reads_paused.fetch_add(1, std::memory_order_relaxed);
         session.client_read_paused = client_paused;
         session.upstream_read_paused = upstream_paused;
-        const bool is_paused = client_paused || upstream_paused;
-        if (is_paused == was_paused)
+        // Only a session stuck above its OWN mark is a stalled peer. One merely throttled because
+        // other sessions filled the shared budget is making normal progress and must keep its idle
+        // deadline, or congestion elsewhere would reap it and discard the share it is holding.
+        const bool is_stalled = client_queue_high || upstream_queue_high;
+        if (is_stalled == was_stalled)
             return;
-        if (is_paused)
+        if (is_stalled)
             session.stall_deadline = SteadyClock::now() + kRelayStallTimeout;
         if (session.stage == SessionStage::Relay)
             schedule_timeout(session);
@@ -1184,7 +1214,7 @@ private:
     SteadyClock::time_point timeout_deadline(const Session& session) const {
         if (session.stage != SessionStage::Relay)
             return session.deadline;
-        if (session.client_read_paused || session.upstream_read_paused)
+        if (session.client_queue_stalled || session.upstream_queue_stalled)
             return session.stall_deadline;
         return session.last_activity +
                std::chrono::seconds(session.runtime->config->limits.idle_timeout_seconds);

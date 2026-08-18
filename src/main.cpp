@@ -16,6 +16,7 @@
 
 #include <poll.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 
 #ifdef HAVE_MIMALLOC
@@ -37,6 +38,31 @@ namespace {
 
 constexpr std::string_view kDefaultConfigPath = "/etc/erikslund-pool-lb/pool-lb.yml";
 constexpr auto kMainLoopInterval = std::chrono::milliseconds(200);
+// Backend addresses and TLS material are otherwise only re-read on SIGHUP, so a pool that changes
+// IP is an outage until a human signals the process, and a renewed certificate is invisible to it.
+// Both refreshes run here rather than on the health thread because ServiceState::publish has a
+// single writer by design.
+constexpr auto kAddressRefreshInterval = std::chrono::minutes(5);
+constexpr auto kTlsMaterialPollInterval = std::chrono::seconds(30);
+
+// Identity of the TLS material actually on disk, so a renewal is noticed without reading the keys.
+std::string tls_material_fingerprint(const erikslund::core::Config& config) {
+    std::string fingerprint;
+    for (const erikslund::core::ListenerConfig& listener : config.listeners) {
+        if (!listener.tls)
+            continue;
+        for (const std::string* path : {&listener.certificate_file, &listener.private_key_file}) {
+            struct stat info {};
+            if (::stat(path->c_str(), &info) == 0)
+                fingerprint += std::format("{}:{}:{};", *path,
+                                           static_cast<std::int64_t>(info.st_mtime),
+                                           static_cast<std::int64_t>(info.st_size));
+            else
+                fingerprint += *path + ":missing;";
+        }
+    }
+    return fingerprint;
+}
 
 std::atomic<bool> stop_requested{false};
 std::atomic<bool> reload_requested{false};
@@ -165,6 +191,9 @@ int main(int argument_count, char** arguments) {
         });
         core::log::info("Observability ready on {}", config->api_address);
 
+        std::string tls_fingerprint = tls_material_fingerprint(*config);
+        auto next_address_refresh = std::chrono::steady_clock::now() + kAddressRefreshInterval;
+        auto next_tls_poll = std::chrono::steady_clock::now() + kTlsMaterialPollInterval;
         while (!stop_requested.load(std::memory_order_relaxed)) {
             if (reload_requested.exchange(false, std::memory_order_relaxed)) {
                 try {
@@ -194,6 +223,35 @@ int main(int argument_count, char** arguments) {
                 } catch (const std::exception& error) {
                     core::log::warning("Configuration reload failed; keeping current settings: {}",
                                        error.what());
+                }
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_address_refresh) {
+                next_address_refresh = now + kAddressRefreshInterval;
+                try {
+                    // Rebuilding carries unchanged backends over untouched, so this is a no-op
+                    // until a name actually resolves somewhere new.
+                    auto refreshed = routing::make_routing_table(
+                        *config, state.runtime.load(std::memory_order_acquire)->routing);
+                    state.publish(config, refreshed);
+                } catch (const std::exception& error) {
+                    core::log::warning("Backend address refresh failed; keeping routes: {}",
+                                       error.what());
+                }
+            }
+            if (now >= next_tls_poll) {
+                next_tls_poll = now + kTlsMaterialPollInterval;
+                if (const std::string fingerprint = tls_material_fingerprint(*config);
+                    fingerprint != tls_fingerprint) {
+                    try {
+                        edge.reload_tls(*config);
+                        // Only on success, so a certificate caught mid-write is retried rather
+                        // than recorded as already applied.
+                        tls_fingerprint = fingerprint;
+                    } catch (const std::exception& error) {
+                        core::log::warning("TLS material changed but reload failed; "
+                                           "keeping current credentials: {}", error.what());
+                    }
                 }
             }
             std::this_thread::sleep_for(kMainLoopInterval);
