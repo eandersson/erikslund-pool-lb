@@ -50,6 +50,7 @@ constexpr std::size_t kQueueMarkDivisor = 2;
 static_assert(kIoChunkBytes >= SSL3_RT_MAX_PLAIN_LENGTH,
               "the read chunk must hold a whole TLS record so decrypted plaintext cannot strand");
 constexpr auto kRelayStallTimeout = std::chrono::seconds(60);
+constexpr std::uint32_t kMaximumConsecutiveProtocolErrors = 32;
 
 enum class EventKind : std::uint64_t {
     Client = 0,
@@ -157,6 +158,7 @@ struct Session {
     bool queue_limit_exceeded = false;
     bool client_read_paused = false;
     bool upstream_read_paused = false;
+    std::uint32_t consecutive_protocol_errors = 0;
     TlsOperation tls_operation = TlsOperation::None;
     IoDirection tls_direction = IoDirection::Read;
     std::size_t client_write_retry_bytes = 0;
@@ -761,8 +763,7 @@ private:
         if (session.tls_operation == TlsOperation::None &&
             !session.to_client.empty() && !flush_client(session))
             return false;
-        if ((events & EPOLLOUT) != 0 && !session.upstream_read_closed &&
-            !session.to_upstream.empty()) {
+        if ((events & EPOLLOUT) != 0 && !session.to_upstream.empty()) {
             const IoResult result = write_upstream(session);
             if (result.status == IoStatus::Error || result.status == IoStatus::Closed)
                 return false;
@@ -776,6 +777,7 @@ private:
         if (session.upstream_read_paused && (events & EPOLLHUP) != 0)
             session.upstream_read_closed = true;
         if (session.upstream_read_closed) {
+            flush_upstream_queue(session);
             discard_upstream(session);
             return !session.to_client.empty();
         }
@@ -887,6 +889,21 @@ private:
         }
     }
 
+    bool commit_consumed(Session& session, std::size_t consumed) {
+        if (consumed == 0)
+            return true;
+        const std::size_t maximum_buffer = session.runtime->config->limits.max_buffer_bytes;
+        if (consumed > maximum_buffer ||
+            session.to_upstream.size() > maximum_buffer - consumed) {
+            worker_stats_.record_protocol_error(stratum::ValidationError::InvalidShape);
+            return false;
+        }
+        session.to_upstream.append(std::string_view(session.line_buffer.data(), consumed));
+        session.line_buffer.erase(0, consumed);
+        release_oversized_string(session.line_buffer);
+        return true;
+    }
+
     bool process_client_bytes(Session& session, std::string_view bytes) {
         if (!append_line_bytes(session, bytes))
             return false;
@@ -898,6 +915,7 @@ private:
             const std::size_t line_size = newline - consumed;
             if (line_size > session.runtime->config->limits.max_line_bytes) {
                 worker_stats_.record_protocol_error(stratum::ValidationError::InvalidShape);
+                commit_consumed(session, consumed);
                 return false;
             }
             const std::string_view line(session.line_buffer.data() + consumed, line_size);
@@ -905,32 +923,31 @@ private:
                 line, session.protocol_state, session.runtime->config->protocol);
             if (!validation) {
                 worker_stats_.record_protocol_error(validation.error);
-                return false;
+                if (!session.protocol_state.received_message ||
+                    ++session.consecutive_protocol_errors > kMaximumConsecutiveProtocolErrors) {
+                    commit_consumed(session, consumed);
+                    return false;
+                }
+                if (!commit_consumed(session, consumed))
+                    return false;
+                session.line_buffer.erase(0, line_size + 1);
+                release_oversized_string(session.line_buffer);
+                consumed = 0;
+                continue;
             }
+            session.consecutive_protocol_errors = 0;
             consumed = newline + 1;
             const bool initial_message = !session.protocol_state.received_message;
             stratum::record_request(session.protocol_state, validation.method);
             if (initial_message) {
-                if (!begin_upstream_connect(session))
+                if (!begin_upstream_connect(session)) {
+                    commit_consumed(session, consumed);
                     return false;
+                }
             }
         }
-        if (consumed > 0) {
-            const std::size_t maximum_buffer =
-                session.runtime->config->limits.max_buffer_bytes;
-            if (consumed > maximum_buffer ||
-                session.to_upstream.size() > maximum_buffer - consumed) {
-                worker_stats_.record_protocol_error(stratum::ValidationError::InvalidShape);
-                return false;
-            }
-            // These bytes already hold a process-wide queue reservation in line_buffer. Move
-            // their logical ownership in one append instead of reserving and releasing once per
-            // line, which also avoids transient false rejections near the global queue limit.
-            session.to_upstream.append(
-                std::string_view(session.line_buffer.data(), consumed));
-            session.line_buffer.erase(0, consumed);
-            release_oversized_string(session.line_buffer);
-        }
+        if (!commit_consumed(session, consumed))
+            return false;
         if (session.line_buffer.size() > session.runtime->config->limits.max_line_bytes ||
             session.to_upstream.size() > session.runtime->config->limits.max_buffer_bytes) {
             worker_stats_.record_protocol_error(stratum::ValidationError::InvalidShape);
@@ -1072,6 +1089,15 @@ private:
         session.upstream_read_paused = false;
     }
 
+    void flush_upstream_queue(Session& session) {
+        while (session.upstream && !session.to_upstream.empty()) {
+            const IoResult result = write_upstream(session);
+            if (result.status != IoStatus::Data || result.size == 0)
+                break;
+            state_.stats.release_queued_bytes(result.size);
+        }
+    }
+
     void record_upstream_error(Session& session) const {
         if (session.backend)
             session.backend->connection_errors.fetch_add(1, std::memory_order_relaxed);
@@ -1199,12 +1225,8 @@ private:
         if (iterator == sessions_.end())
             return;
         Session& session = iterator->second;
-        if (session.upstream && session.stage == SessionStage::Relay &&
-            !session.to_upstream.empty()) {
-            const IoResult flushed = write_upstream(session);
-            if (flushed.status == IoStatus::Data && flushed.size > 0)
-                state_.stats.release_queued_bytes(flushed.size);
-        }
+        if (session.stage == SessionStage::Relay)
+            flush_upstream_queue(session);
         ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, session.client.get(), nullptr);
         if (session.upstream)
             ::epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, session.upstream.get(), nullptr);
