@@ -131,7 +131,7 @@ EdgeServer::~EdgeServer() {
     stop();
 }
 
-void EdgeServer::start(std::function<void()> on_worker_failure) {
+void EdgeServer::start(const std::function<void()>& on_worker_failure) {
     if (!threads_.empty())
         return;
     threads_.reserve(runtime_->reactors.size());

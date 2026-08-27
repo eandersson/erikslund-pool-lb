@@ -20,7 +20,7 @@ public:
 
     // on_worker_failure runs on the failing reactor thread when it stops early; the caller decides
     // whether losing a worker should stop the process.
-    void start(std::function<void()> on_worker_failure = {});
+    void start(const std::function<void()>& on_worker_failure = {});
     void stop();
     void reload_tls(const core::Config& config);
 

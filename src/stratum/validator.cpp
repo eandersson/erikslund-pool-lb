@@ -281,7 +281,6 @@ ValidationError valid_params(RequestMethod method, const RawParams& params) {
     case RequestMethod::Submit:
         return strings_only(params, 5, 6, kMaximumIdentityBytes);
     case RequestMethod::Subscribe:
-        return primitive_params(params, kMaximumSubscribeParams);
     case RequestMethod::ExtranonceSubscribe:
         return primitive_params(params, kMaximumSubscribeParams);
     case RequestMethod::SuggestTarget:
