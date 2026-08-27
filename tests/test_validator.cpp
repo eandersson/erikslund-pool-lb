@@ -342,3 +342,24 @@ TEST_CASE("firmware replies survive every JSON-RPC null shape") {
     // Notification-style replies carry a null id.
     CHECK(validate_request(R"({"id":null,"result":true,"error":null})", state, config));
 }
+
+TEST_CASE("aggregating proxies are not refused for volunteering extra arguments") {
+    const ProtocolConfig config;
+    const ProtocolState initial;
+    // A rental proxy's opening handshake must not die on an argument the pool would simply ignore.
+    CHECK(validate_request(
+        R"({"id":1,"method":"mining.subscribe","params":["MRR-Hash/1.0.0","sess","pool.example",3333]})",
+        initial, config));
+    // mining.extranonce.subscribe is nominally parameterless; a volunteered argument is forwarded
+    // rather than refused, because dropping it silently breaks extranonce negotiation.
+    CHECK(validate_request(
+        R"({"id":2,"method":"mining.extranonce.subscribe","params":["MRR-Hash/1.0.0"]})", initial,
+        config));
+    CHECK(validate_request(R"({"id":3,"method":"mining.extranonce.subscribe","params":[]})",
+                           initial, config));
+    // Structured payloads stay refused in both: this widens arity, not shape.
+    CHECK(validate_request(
+              R"({"id":4,"method":"mining.extranonce.subscribe","params":[{"nested":true}]})",
+              initial, config)
+              .error == ValidationError::InvalidParams);
+}

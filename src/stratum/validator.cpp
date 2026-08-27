@@ -49,7 +49,7 @@ constexpr std::size_t kMaximumIdentityBytes = 512;
 constexpr std::size_t kMaximumShortStringBytes = 128;
 constexpr std::size_t kMaximumConfigureExtensions = 32;
 constexpr std::size_t kMaximumConfigureOptions = 64;
-constexpr std::size_t kMaximumSubscribeParams = 4;
+constexpr std::size_t kMaximumSubscribeParams = 8;
 constexpr std::size_t kMaximumAuthorizeParams = 2;
 
 using RawParams = glz::inplace_vector<glz::raw_json_view, kMaximumGenericParams>;
@@ -283,7 +283,7 @@ ValidationError valid_params(RequestMethod method, const RawParams& params) {
     case RequestMethod::Subscribe:
         return primitive_params(params, kMaximumSubscribeParams);
     case RequestMethod::ExtranonceSubscribe:
-        return params.empty() ? ValidationError::None : ValidationError::InvalidParams;
+        return primitive_params(params, kMaximumSubscribeParams);
     case RequestMethod::SuggestTarget:
         return strings_only(params, 1, 1, kMaximumShortStringBytes);
     case RequestMethod::SuggestDifficulty: {
